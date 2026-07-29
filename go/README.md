@@ -121,4 +121,4 @@ See [`../docs/PUBLISHING.md`](../docs/PUBLISHING.md) — Go modules publish via 
 
 ## License
 
-MIT
+GPL-3.0-or-later

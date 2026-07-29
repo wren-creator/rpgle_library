@@ -167,4 +167,4 @@ See [`docs/PUBLISHING.md`](./docs/PUBLISHING.md).
 
 ## License
 
-MIT
+GPL-3.0-or-later
