@@ -11,7 +11,7 @@
     "./interpreter": "./src/interpreter.js"
   },
   "scripts": {
-    "test": "node --test test/",
+    "test": "node --test",
     "example": "node examples/quick-math.js",
     "lint": "eslint src/"
   },
