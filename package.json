@@ -1,0 +1,56 @@
+{
+  "name": "rpgle_library",
+  "version": "1.0.0",
+  "description": "A zero-dependency RPG IV (RPGLE) and DDS parser/interpreter for Node.js.",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./dds": "./src/dds.js",
+    "./rpgle": "./src/rpgle.js",
+    "./expr": "./src/expr.js",
+    "./interpreter": "./src/interpreter.js"
+  },
+  "scripts": {
+    "test": "node --test test/",
+    "example": "node examples/quick-math.js",
+    "lint": "eslint src/"
+  },
+  "keywords": [
+    "rpg",
+    "rpgle",
+    "rpg-iv",
+    "dds",
+    "ibm-i",
+    "as400",
+    "iseries",
+    "5250",
+    "ile",
+    "mainframe",
+    "ibm"
+  ],
+  "author": "Britley Wren Hoff",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wren-creator/rpgle_library.git"
+  },
+  "bugs": {
+    "url": "https://github.com/wren-creator/rpgle_library/issues"
+  },
+  "homepage": "https://github.com/wren-creator/rpgle_library#readme",
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "files": [
+    "src/",
+    "docs/",
+    "examples/",
+    "programs/",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
+}
