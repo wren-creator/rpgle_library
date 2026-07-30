@@ -1,0 +1,31 @@
+     A* SALES-REPORT.DSPF -- WORKSTN display file for the
+     A* sales-report example program shipped with rpgle_library.
+
+     A                                      DSPSIZ(24 80 *DS3)
+
+     A          R REPORT
+     A                                  1 29'REGIONAL SALES REPORT'
+     A                                  2 35'Q3 FY2026'
+     A                                  4  3'Region                     Units      Revenue ($)'
+     A                                  5  3'--------------------------------------------------'
+     A                                  6  3'North America'
+     A            UNITS1         5  0O  6 30
+     A            REV1           8  0O  6 42
+     A                                  7  3'Europe'
+     A            UNITS2         5  0O  7 30
+     A            REV2           8  0O  7 42
+     A                                  8  3'Asia Pacific'
+     A            UNITS3         5  0O  8 30
+     A            REV3           8  0O  8 42
+     A                                  9  3'Latin America'
+     A            UNITS4         5  0O  9 30
+     A            REV4           8  0O  9 42
+     A                                 10  3'EMEA'
+     A            UNITS5         5  0O 10 30
+     A            REV5           8  0O 10 42
+     A                                 11  3'--------------------------------------------------'
+     A                                 12  3'TOTAL'
+     A            TOTUNIT        6  0O 12 30
+     A            TOTREV         9  0O 12 42
+     A                                 14  3'Press Enter to exit'
+     A            CMD            1A  B 14 24

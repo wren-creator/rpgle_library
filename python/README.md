@@ -29,7 +29,7 @@ screen = gen.send(Resume(key="ENTER", values={"cmd": "M"}))
 print(screen.format_name)   # still "MAIN" after a move
 ```
 
-Run it yourself: `python examples/quick_math.py` (minimal, no display file at all) or `python examples/adventure_cli.py` (a full plain-text playthrough).
+Run it yourself: `python examples/quick_math.py` (minimal, no display file at all), `python examples/adventure_cli.py` (a full plain-text playthrough), or `python examples/sales_report.py` (a single-screen business report, computed live and rendered as a 24x80 grid).
 
 ---
 

@@ -41,7 +41,13 @@ func main() {
 }
 ```
 
-Run it yourself: `go run ./examples/quick-math` (minimal, no display file at all) or `go run ./examples/adventure-cli` (a full plain-text playthrough).
+Run it yourself (`cd` into the example's own directory first — each one reads its DDS/RPGLE source via a path relative to itself, not to wherever `go run` was invoked from):
+
+```bash
+cd examples/quick-math && go run .        # minimal, no display file at all
+cd examples/adventure-cli && go run .     # a full plain-text playthrough
+cd examples/sales-report && go run .      # a single-screen business report, computed live
+```
 
 ---
 
