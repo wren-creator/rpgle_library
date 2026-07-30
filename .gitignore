@@ -4,6 +4,7 @@ __pycache__/
 *.egg-info/
 python/build/
 python/dist/
+.venv/
 
 # Node
 node_modules/
