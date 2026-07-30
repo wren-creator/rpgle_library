@@ -1,6 +1,6 @@
 # DDS Reference (Display Files)
 
-`src/dds.js` / `go/dds.go` parse DDS source for **WORKSTN display files only** — the subset needed to describe a screen made of record formats, constant text, and named input/output fields. This document covers exactly what's parsed, and is explicit about what isn't.
+`src/dds.js` / `go/dds.go` / `python/src/rpgle/dds.py` parse DDS source for **WORKSTN display files only** — the subset needed to describe a screen made of record formats, constant text, and named input/output fields. This document covers exactly what's parsed, and is explicit about what isn't.
 
 ## Column Layout
 

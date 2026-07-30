@@ -32,7 +32,7 @@ The variable-declaration lines of fixed-form RPG, identified by `D` in column 6.
 IBM's fixed-column language for describing files externally to the programs that use them — display files (screens), database files, printer files. This library parses only the display-file dialect. See [`DDS_REFERENCE.md`](./DDS_REFERENCE.md).
 
 ### EXFMT
-The RPG opcode that writes a display-file record format to the screen and reads the operator's response, in one instruction. The closest real-world analog is a synchronous network round-trip — which is exactly why this library models it as a generator yield (JS) / channel handshake (Go) rather than a plain function call: the program's execution genuinely pauses until the "response" arrives.
+The RPG opcode that writes a display-file record format to the screen and reads the operator's response, in one instruction. The closest real-world analog is a synchronous network round-trip — which is exactly why this library models it as a generator yield (JS, Python) / channel handshake (Go) rather than a plain function call: the program's execution genuinely pauses until the "response" arrives.
 
 ### EXSR / BEGSR / ENDSR (Subroutine)
 `BEGSR name`...`ENDSR` declares a subroutine; `EXSR name` calls it. RPG subroutines have no parameters or return values of their own — they operate on shared program variables, and returning is unconditional (no early-return opcode; a subroutine always runs to its `ENDSR`).

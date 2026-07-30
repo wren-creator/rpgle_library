@@ -1,8 +1,9 @@
 # Publishing Guide
 
-This library publishes two ways on every version tag:
+This library publishes three ways on every version tag:
 - **npmjs.org** — public, installable with `npm install rpgle_library`
 - **Go module proxy** — installable with `go get github.com/wren-creator/rpgle_library/go`, driven entirely by git tags (no separate publish step)
+- **PyPI** — public, installable with `pip install rpgle_library`
 
 ---
 
@@ -15,9 +16,16 @@ This library publishes two ways on every version tag:
 3. In your GitHub repo → **Settings → Secrets and variables → Actions**
 4. Create a secret named `NPM_TOKEN` with that value
 
-### 2. Confirm placeholders
+### 2. PyPI Token
 
-`package.json` and `go/go.mod` already point at `github.com/wren-creator/rpgle_library`. If you're publishing under a different GitHub account or org, update both — and keep `rpgle_library` as the literal name everywhere (package.json `name`, the repo folder, and the Go module path) rather than letting them drift into different spellings.
+1. Log in at [pypi.org](https://pypi.org) and go to **Account Settings → API tokens**
+2. Create a new token scoped to the `rpgle_library` project (or account-wide, for the first release before the project exists on PyPI)
+3. In your GitHub repo → **Settings → Secrets and variables → Actions**
+4. Create a secret named `PYPI_TOKEN` with that value
+
+### 3. Confirm placeholders
+
+`package.json`, `go/go.mod`, and `python/pyproject.toml` already point at `github.com/wren-creator/rpgle_library`. If you're publishing under a different GitHub account or org, update all three — and keep `rpgle_library` as the literal name everywhere (package.json `name`, the repo folder, the Go module path, and pyproject.toml's `name`) rather than letting them drift into different spellings.
 
 ---
 
@@ -57,6 +65,20 @@ No credentials or CI step are required for this — the proxy fetches directly f
 
 ---
 
+## Releasing a New Version (Python)
+
+```bash
+# 1. Update the version in python/pyproject.toml to match the JS/Go release
+
+# 2. Build and upload
+cd python
+python -m pip install --upgrade build twine
+python -m build
+python -m twine upload dist/*
+```
+
+Like the npm publish step, this is left as a manual command for now — the GitHub Actions workflow doesn't run it automatically until a `python-publish` job is uncommented in `.github/workflows/ci.yml` (mirroring the currently-commented `npm-publish` job, gated the same way on the `PYPI_TOKEN` secret above).
+
 ## Manual Publishing (npm, if needed)
 
 ```bash
@@ -73,4 +95,4 @@ This library follows [Semantic Versioning](https://semver.org/):
 - **Minor** — new opcodes, new DDS keyword support, new examples, new API functions
 - **Major** — breaking changes to the public API (function signatures, the EXFMT yield/resume shape, exports)
 
-The JS and Go implementations are meant to behave identically for any input both support. A behavior change in one that isn't mirrored in the other should be treated as a bug, not shipped as a version bump in only one language.
+The JS, Go, and Python implementations are meant to behave identically for any input all three support. A behavior change in one that isn't mirrored in the others should be treated as a bug, not shipped as a version bump in only one language.

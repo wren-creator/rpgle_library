@@ -34,7 +34,7 @@ Running a program happens in three phases, each its own module:
 
 Turns source lines into a flat list of spec records, in source order. No control-flow resolution happens here — `IF`/`ENDIF` are just two statements next to each other in the list, with no structural relationship yet.
 
-### Phase 2: Compile (`interpreter.js`'s `compile()`)
+### Phase 2: Compile (`interpreter.js`'s `compile()`; `compile_program()` in the Python port, renamed to avoid shadowing Python's `compile` builtin)
 
 Walks the flat statement list once and produces a jump-resolved instruction array, using the classic backpatch technique: an open block (`IF`, `DOW`, `SELECT`) pushes a frame onto a stack; its closing keyword (`ENDIF`, `ENDDO`, `ENDSL`) pops the frame and fills in the jump target(s) it owns.
 
@@ -59,7 +59,8 @@ A simple program counter walks the compiled instruction array. Every opcode is a
 Real RPG's `EXFMT` is "write a format to the screen, then read it back" in one instruction — the program blocks until the operator responds. This library models that with:
 
 - **JS**: `runProgram()` is a generator. Hitting `EXFMT` `yield`s `{ formatName, fields, cursor, keys, inputMap }` and blocks until the caller calls `.next({ key, values })`.
-- **Go**: `Run()` starts the program in a goroutine and returns a `*Runner`. Hitting `EXFMT` blocks on a channel send; the caller drives it with `Next(resume)`, which has the same call shape as the JS `.next()` loop.
+- **Python**: `run_program()` is likewise a generator (Python has them natively, same as JS) — hitting `EXFMT` `yield`s a `ScreenData` and blocks until the caller calls `.send(Resume(key, values))`.
+- **Go**: `Run()` starts the program in a goroutine and returns a `*Runner`. Hitting `EXFMT` blocks on a channel send; the caller drives it with `Next(resume)`, which has the same call shape as the JS/Python generator loop.
 
 Either way, the shape is the same plain data — no terminal protocol is involved. `fields` is what to display; `inputMap` says which screen rows are typeable and what variable each one feeds; `keys` maps recognized function keys (`F3`, etc.) to the response indicator that key turns on, straight from the format's own `CFnn`/`CAnn` DDS keywords.
 

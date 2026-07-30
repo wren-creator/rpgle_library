@@ -30,13 +30,28 @@ jobs:
       - run: go vet ./...
         working-directory: go
 
+  python-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.12', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install -e .
+        working-directory: python
+      - run: python -m unittest discover -s tests -v
+        working-directory: python
+
   # Publishing is documented in docs/PUBLISHING.md but left commented out
-  # here until NPM_TOKEN is configured (Settings -> Secrets and variables
-  # -> Actions) -- uncomment once you're ready to publish automatically
-  # on a version tag push.
+  # here until NPM_TOKEN/PYPI_TOKEN is configured (Settings -> Secrets and
+  # variables -> Actions) -- uncomment once you're ready to publish
+  # automatically on a version tag push.
   #
   # npm-publish:
-  #   needs: [js-test, go-test]
+  #   needs: [js-test, go-test, python-test]
   #   if: startsWith(github.ref, 'refs/tags/v')
   #   runs-on: ubuntu-latest
   #   steps:
@@ -48,3 +63,20 @@ jobs:
   #     - run: npm publish --access public
   #       env:
   #         NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+  #
+  # python-publish:
+  #   needs: [js-test, go-test, python-test]
+  #   if: startsWith(github.ref, 'refs/tags/v')
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: actions/setup-python@v5
+  #       with:
+  #         python-version: '3.13'
+  #     - run: python -m pip install --upgrade build twine
+  #     - run: python -m build
+  #       working-directory: python
+  #     - run: python -m twine upload python/dist/*
+  #       env:
+  #         TWINE_USERNAME: __token__
+  #         TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}

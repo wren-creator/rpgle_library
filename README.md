@@ -1,10 +1,11 @@
 # rpgle_library
 
-A zero-dependency RPG IV (RPGLE) and DDS parser/interpreter, for JS and Go.
+A zero-dependency RPG IV (RPGLE) and DDS parser/interpreter, for JS, Go, and Python.
 
 ```
 npm install rpgle_library
 go get github.com/wren-creator/rpgle_library/go
+pip install rpgle_library
 ```
 
 ---
@@ -151,6 +152,25 @@ screen, done, _ = r.Next(&rpgle.Resume{Key: "ENTER", Values: map[string]string{"
 ```
 
 Full API and the JS-generator-to-Go-channel design: [`go/README.md`](./go/README.md).
+
+---
+
+## Python Usage
+
+```python
+from rpgle import Resume, parse_dds, parse_rpgle, run_program
+
+dds = parse_dds(dspf_source)
+prog = parse_rpgle(rpgle_source)
+
+gen = run_program(prog, dds)
+screen = next(gen)
+print(screen.format_name)
+
+screen = gen.send(Resume(key="ENTER", values={"cmd": "M"}))
+```
+
+Python has native generators, just like JS, so this port didn't need Go's goroutine/channel workaround — `run_program()` is a near 1:1 translation of the original JS generator. Full API: [`python/README.md`](./python/README.md).
 
 ---
 

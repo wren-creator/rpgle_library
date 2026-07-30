@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rpgle_library"
+version = "1.0.0"
+description = "A zero-dependency RPG IV (RPGLE) and DDS parser/interpreter for Python."
+readme = "README.md"
+license = { text = "GPL-3.0-or-later" }
+authors = [{ name = "Britley Wren Hoff" }]
+requires-python = ">=3.9"
+keywords = ["rpg", "rpgle", "rpg-iv", "dds", "ibm-i", "as400", "iseries", "5250", "ile", "mainframe", "ibm"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://github.com/wren-creator/rpgle_library#readme"
+Repository = "https://github.com/wren-creator/rpgle_library"
+Issues = "https://github.com/wren-creator/rpgle_library/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
