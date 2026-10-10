@@ -35,6 +35,7 @@ from .interpreter import (
     render_format,
     run_program,
 )
+from .pf import PfField, PhysicalFile, parse_pf
 from .rpgle import DSpec, FileSpec, Program, Statement, parse_rpgle
 
 __all__ = [
@@ -50,6 +51,10 @@ __all__ = [
     "DSpec",
     "Statement",
     "parse_rpgle",
+    # pf.py
+    "PhysicalFile",
+    "PfField",
+    "parse_pf",
     # expr.py
     "Context",
     "Var",

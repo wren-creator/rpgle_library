@@ -67,11 +67,13 @@ class CliTest(unittest.TestCase):
             p = pathlib.Path(d)
             (p / "q.rpgle").write_text(QUICK_RPG)
             (p / "q.dspf").write_text(QUICK_DSPF)
+            import contextlib
             import sys
             old = sys.stdin
             sys.stdin = io.StringIO("\n")
             try:
-                self.assertEqual(main(["run", str(p / "q.rpgle")]), 0)
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(main(["run", str(p / "q.rpgle")]), 0)
             finally:
                 sys.stdin = old
 

@@ -38,13 +38,15 @@ _INZ_RE = re.compile(r"INZ\(([^)]*)\)", re.IGNORECASE)
 
 @dataclass
 class FileSpec:
-    """The single WORKSTN file an RPGLE program can declare."""
+    """One F-spec: a WORKSTN display file or a DISK file."""
 
     name: Optional[str] = None
-    type: Optional[str] = None
+    type: Optional[str] = None  # I=input, O=output, U=update, C=combined
     designation: Optional[str] = None
-    format: Optional[str] = None
+    format: Optional[str] = None  # E = externally described
     device: Optional[str] = None
+    addition: Optional[str] = None  # 'A' = records may be added
+    keyed: bool = False  # K in column 34 (the PF's DDS key is what actually orders access)
 
 
 @dataclass
@@ -73,13 +75,20 @@ class Statement:
     expr: Optional[str] = None  # extended factor 2 (EVAL/IF/DOW/WHEN): free-form, cols 36-80
     factor2: Optional[str] = None  # classic factor 2 (DIV/MVR-style ops): cols 36-49
     result: Optional[str] = None  # classic result (DIV/MVR-style ops): cols 50-63
+    # Resulting indicators, cols 71-72 / 73-74 / 75-76 (two digits each).
+    # What they mean depends on the opcode: CHAIN uses hi as not-found,
+    # READ uses eq as end-of-file. See interpreter.py's file ops.
+    ind_hi: Optional[str] = None
+    ind_lo: Optional[str] = None
+    ind_eq: Optional[str] = None
 
 
 @dataclass
 class Program:
     """A fully-tokenized RPGLE source file."""
 
-    file: FileSpec = field(default_factory=FileSpec)
+    file: FileSpec = field(default_factory=FileSpec)  # the WORKSTN file
+    files: list[FileSpec] = field(default_factory=list)  # every F-spec, source order
     dspecs: list[DSpec] = field(default_factory=list)
     statements: list[Statement] = field(default_factory=list)
 
@@ -99,11 +108,20 @@ def parse_rpgle(source: str) -> Program:
             continue  # comment line
 
         if spec_type == "F":
-            prog.file.name = col(line, 7, 16)
-            prog.file.type = col(line, 17, 17)
-            prog.file.designation = col(line, 18, 18)
-            prog.file.format = col(line, 22, 22)
-            prog.file.device = col(line, 36, 42)
+            fs = FileSpec(
+                name=col(line, 7, 16),
+                type=col(line, 17, 17),
+                designation=col(line, 18, 18),
+                format=col(line, 22, 22),
+                device=col(line, 36, 42),
+                addition=col(line, 20, 20) or None,
+                keyed=col(line, 34, 34).upper() == "K",
+            )
+            prog.files.append(fs)
+            # prog.file stays "the WORKSTN file" (first one wins) so
+            # single-screen programs and existing callers are unchanged.
+            if fs.device.upper() == "WORKSTN" and not prog.file.name:
+                prog.file = fs
             continue
 
         if spec_type == "D":
@@ -151,6 +169,9 @@ def parse_rpgle(source: str) -> Program:
                     expr=expr or None,
                     factor2=factor2 or None,
                     result=result or None,
+                    ind_hi=col(line, 71, 72) or None,
+                    ind_lo=col(line, 73, 74) or None,
+                    ind_eq=col(line, 75, 76) or None,
                 )
             )
             continue

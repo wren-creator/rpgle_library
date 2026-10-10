@@ -90,6 +90,26 @@ Only `I`/`B` fields end up in a rendered screen's `inputMap` — see `renderForm
 - `90 MSGTXT 40A O 7 3`: only shown when indicator 90 is on — this is how the game conditionally shows a status message.
 - `CMD 1A B 22 31`: a 1-character input/output field — the player's typed command.
 
+## Physical Files (DISK)
+
+A DISK file's DDS describes one record format, its fields, and its key. The RPG program declares only the file name (F-spec column 22 = `E`), and every field below becomes a program variable, the same way a display file's fields do. Parsed by `parse_pf()` in `python/src/rpgle/pf.py` (Python port only so far).
+
+```
+     A                                      UNIQUE
+     A          R CUSTREC
+     A            CUSTNO         5S 0
+     A            NAME          20A
+     A            BAL            9P 2
+     A          K CUSTNO
+```
+
+- `UNIQUE` (before the `R` line): no two records may share a key. Without it, duplicate keys are allowed, like the real thing.
+- `R CUSTREC`: the record format. One format per file.
+- Numeric types `P`, `S`, `B`, `F`, or any field with decimal positions, are numeric. Blank type with no decimals is character.
+- `K CUSTNO`: key field, in order. No `K` lines means arrival sequence, and `CHAIN` takes a relative record number.
+
+Not supported: `DESCEND` keys (rejected with an error), join and select/omit logical files, `REF`/`REFFLD`, `ALIAS`, more than one record format per file.
+
 ## See Also
 
 - [`LANGUAGE.md`](./LANGUAGE.md) — how the RPGLE side of a program reads and writes these fields
