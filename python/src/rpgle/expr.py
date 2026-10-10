@@ -146,6 +146,12 @@ class Context:
     # Answers %EOF/%FOUND/%EQUAL: (kind, file name or None for "the
     # last file used") -> bool. None when the program has no DISK files.
     file_status: Optional[Callable[[str, Optional[str]], bool]] = None
+    # User procedures. has_proc(name) says whether name is one; call_proc
+    # runs it from inside an expression with [(value, Var or None), ...]
+    # arguments (the Var is there when the argument was a bare variable,
+    # which is what a by-reference parameter needs).
+    has_proc: Optional[Callable[[str], bool]] = None
+    call_proc: Optional[Callable[[str, list], Any]] = None
 
 
 @dataclass
@@ -504,6 +510,9 @@ class _Parser:
         if t.type == "func":
             return self._parse_func_call(t.value)
         if t.type == "name":
+            nxt = self._peek()
+            if nxt and nxt.type == "op" and nxt.value == "(" and self.ctx.has_proc and self.ctx.has_proc(t.value):
+                return self.ctx.call_proc(t.value, self._parse_call_args())
             return self._read_var(t.value)
         if t.type == "op" and t.value == "(":
             v = self.parse_expr()
@@ -522,6 +531,33 @@ class _Parser:
         if m:
             return bool(self.ctx.indicators.get(m.group(1), False))
         raise RpgleError(f"Unsupported RPG figurative constant: {name}")
+
+    def _parse_call_args(self) -> list[tuple[Any, Any]]:
+        """( arg : arg ... ) -> [(value, Var or None)]. The Var is set when
+        the argument is a single variable name, so a by-reference
+        parameter can alias it instead of copying.
+        """
+        self._expect_op("(")
+        args: list[tuple[Any, Any]] = []
+        t = self._peek()
+        if t and t.type == "op" and t.value == ")":
+            self._next()
+            return args
+        while True:
+            first = self._peek()
+            before = self.pos
+            value = self.parse_expr()
+            var = None
+            if self.pos - before == 1 and first is not None and first.type == "name":
+                var = self.ctx.vars.get(first.value.lower())
+            args.append((value, var))
+            t = self._next()
+            if t is None:
+                raise RpgleError("Unclosed ( in procedure call")
+            if t.type == "op" and t.value == ")":
+                return args
+            if not (t.type == "op" and t.value == ":"):
+                raise RpgleError(f"Expected : or ) in procedure call, got {t.value!r}")
 
     def _parse_file_status(self, name: str) -> bool:
         """%EOF, %FOUND, %EQUAL: the argument is a file name, not an
@@ -579,6 +615,21 @@ def eval_expr(src: str, ctx: Context) -> Any:
     if parser.pos < len(tokens):
         raise RpgleError(f"Trailing tokens in RPG expression: {src!r}")
     return v
+
+
+def eval_call(src: str, ctx: Context) -> tuple[str, list[tuple[Any, Any]]]:
+    """Parses a call statement, name(arg : arg), into the procedure name
+    and its evaluated arguments, without running anything: the caller
+    decides how to run it (CALLP can show screens; an expression can't).
+    """
+    tokens = _tokenize(src)
+    if not tokens or tokens[0].type != "name":
+        raise RpgleError(f"Not a procedure call: {src!r}")
+    parser = _Parser(tokens[1:], ctx)
+    args = parser._parse_call_args()
+    if parser.pos < len(parser.tokens):
+        raise RpgleError(f"Trailing tokens in procedure call: {src!r}")
+    return tokens[0].value, args
 
 
 def split_top(text: str, sep: str) -> list[str]:

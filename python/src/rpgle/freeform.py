@@ -13,8 +13,10 @@ can span lines and several can share one. `//` comments and /* */
 blocks are stripped. Keywords are case-insensitive.
 
 Supported:
-  declarations   ctl-opt (ignored), dcl-s, dcl-c, dcl-f, dcl-ds ... end-ds
+  declarations   ctl-opt (ignored), dcl-s, dcl-c, dcl-f, dcl-ds ... end-ds,
+                 dcl-proc ... end-proc with dcl-pi ... end-pi, dcl-pr (skipped)
                  (qualified, likeds, likerec, extname)
+  calls          callp name(args);  or just  name(args);
   control flow   if/elseif/else/endif, dow, dou, enddo, for/endfor,
                  select/when/other/endsl, leave, iter, return
   subroutines    begsr, endsr, exsr
@@ -24,7 +26,7 @@ Supported:
   other          clear
 
 Not supported yet (each raises an error naming the statement, never
-skips it silently): dcl-proc/dcl-pi/dcl-pr, arrays (dim), pos/overlay,
+skips it silently): arrays (dim), pos/overlay, external procedures,
 date/time types, monitor, /copy, the (e) opcode extender.
 ─────────────────────────────────────────────────────────────────
 """
@@ -36,7 +38,7 @@ from typing import Optional
 
 from .errors import RpgleError
 from .expr import split_top
-from .rpgle import DSpec, DsSpec, FileSpec, Program, Statement
+from .rpgle import DSpec, DsSpec, FileSpec, ParamSpec, ProcSpec, Program, Statement
 
 _WORD = re.compile(r"[A-Za-z][A-Za-z0-9_-]*")
 _FOR = re.compile(
@@ -48,11 +50,7 @@ _KEYED_OPS = {"chain", "setll", "setgt", "reade", "readpe"}  # key then file
 _FILE_ONLY_OPS = {"read", "readp", "write", "update"}  # file or record format
 _SIMPLE = {"else", "endif", "enddo", "endfor", "select", "other", "endsl", "endsr", "leave", "iter"}
 _UNSUPPORTED = {
-    "dcl-proc": "procedures arrive in a later step of Milestone 3",
-    "dcl-pi": "procedures arrive in a later step of Milestone 3",
-    "dcl-pr": "procedures arrive in a later step of Milestone 3",
     "monitor": "MONITOR/ON-ERROR is not supported",
-    "callp": "procedure calls arrive in a later step of Milestone 3",
     "call": "CALL is not supported",
     "dsply": "DSPLY is not supported",
     "reset": "RESET is not supported",
@@ -207,7 +205,7 @@ def _parse_type(type_name: str, params: list[str]) -> tuple[int, Optional[int], 
     raise RpgleError(f"type {type_name} is not supported")
 
 
-def _make_dspec(prog: Program, rest: str, what: str) -> DSpec:
+def _make_dspec(visible: list[DSpec], rest: str, what: str) -> DSpec:
     """Builds the DSpec for `name type(params) keywords`, the shape shared
     by dcl-s and data structure subfields.
     """
@@ -223,7 +221,7 @@ def _make_dspec(prog: Program, rest: str, what: str) -> DSpec:
 
     if type_name.lower() == "like":
         src = (params_s or "").strip()
-        base = next((d for d in prog.dspecs if d.name.lower() == src.lower()), None)
+        base = next((d for d in visible if d.name.lower() == src.lower()), None)
         if base is None:
             raise RpgleError(f"LIKE({src}): only fields declared earlier with dcl-s can be used")
         length, dec, kind = base.length, base.dec, base.kind
@@ -251,11 +249,11 @@ def _make_dspec(prog: Program, rest: str, what: str) -> DSpec:
     return DSpec(name=name, deftype="S", length=length, dec=dec, init=init, kind=kind)
 
 
-def _parse_dcl_s(prog: Program, rest: str) -> None:
-    prog.dspecs.append(_make_dspec(prog, rest, "dcl-s"))
+def _parse_dcl_s(scope, visible: list[DSpec], rest: str) -> None:
+    scope.dspecs.append(_make_dspec(visible, rest, "dcl-s"))
 
 
-def _parse_dcl_ds(prog: Program, rest: str) -> Optional[DsSpec]:
+def _parse_dcl_ds(scope, rest: str) -> Optional[DsSpec]:
     """Starts a data structure. Returns it if it still needs subfields
     (and an end-ds), or None if its layout is borrowed (likeds, likerec,
     extname) and it's already complete.
@@ -282,13 +280,13 @@ def _parse_dcl_ds(prog: Program, rest: str) -> Optional[DsSpec]:
             raise RpgleError(f"dcl-ds {ds.name}: {tok} is not supported yet")
     if (ds.likeds or ds.likerec or ds.extname) and not ds.qualified and ds.likeds:
         ds.qualified = True  # a likeds copy is always accessed qualified
-    if any(d.name.lower() == ds.name.lower() for d in prog.dss):
+    if any(d.name.lower() == ds.name.lower() for d in scope.dss):
         raise RpgleError(f"data structure {ds.name} is declared twice")
-    prog.dss.append(ds)
+    scope.dss.append(ds)
     return None if (ds.likeds or ds.likerec or ds.extname) else ds
 
 
-def _parse_dcl_c(prog: Program, rest: str) -> None:
+def _parse_dcl_c(scope, rest: str) -> None:
     m = re.match(r"^(\w+)\s+(?:const\s*\((.*)\)|(.*))$", rest, re.IGNORECASE | re.DOTALL)
     if not m:
         raise RpgleError(f"can't read declaration: dcl-c {rest}")
@@ -296,11 +294,11 @@ def _parse_dcl_c(prog: Program, rest: str) -> None:
     value = (m.group(2) if m.group(2) is not None else m.group(3)).strip()
     if value.startswith("'"):
         text = value[1:-1].replace("''", "'")
-        prog.dspecs.append(DSpec(name=name, deftype="S", length=len(text), dec=None, init=text))
+        scope.dspecs.append(DSpec(name=name, deftype="S", length=len(text), dec=None, init=text))
     elif re.match(r"^-?\d+(\.\d+)?$", value):
         digits = value.lstrip("-").replace(".", "")
         dec = len(value.split(".")[1]) if "." in value else 0
-        prog.dspecs.append(DSpec(name=name, deftype="S", length=len(digits), dec=dec, init=value))
+        scope.dspecs.append(DSpec(name=name, deftype="S", length=len(digits), dec=dec, init=value))
     else:
         raise RpgleError(f"dcl-c {name}: only literal constants are supported")
 
@@ -350,32 +348,54 @@ class _State:
     def __init__(self) -> None:
         self.prog = Program()
         self.open_ds: Optional[DsSpec] = None  # between dcl-ds and end-ds
+        self.proc: Optional[ProcSpec] = None  # between dcl-proc and end-proc
+        self.in_pi = False  # between dcl-pi and end-pi
+        self.in_pr = False  # between dcl-pr and end-pr (prototypes are skipped)
+
+    @property
+    def scope(self):
+        """Where declarations and statements go: the open procedure, else the program."""
+        return self.proc if self.proc is not None else self.prog
+
+    def visible_dspecs(self) -> list[DSpec]:
+        return [*(self.proc.dspecs if self.proc else []), *self.prog.dspecs]
 
 
 def _statement(state: _State, text: str, line: int) -> None:
     prog = state.prog
+    scope = state.scope
     m = _WORD.match(text)
     word = m.group(0).lower() if m else ""
     rest = text[m.end() :] if m else text
 
+    if state.in_pr:  # prototypes describe procedures defined elsewhere; nothing to run
+        if word == "end-pr":
+            state.in_pr = False
+        return
+    if state.in_pi:
+        if word == "end-pi":
+            state.in_pi = False
+        else:
+            _add_param(state, text)
+        return
     if state.open_ds is not None:
         if word == "end-ds":
             state.open_ds = None
         elif word.startswith("dcl-"):
             raise RpgleError(f"{word} found inside data structure {state.open_ds.name}; is its end-ds missing?")
         else:
-            sub = _make_dspec(prog, text, "subfield")
+            sub = _make_dspec(state.visible_dspecs(), text, "subfield")
             state.open_ds.subfields.append(sub)
         return
     if word == "end-ds":
         return  # closes a DS whose layout was borrowed; nothing to do
 
     def add(op: str, **kw) -> None:
-        prog.statements.append(Statement(op=op, line=line, **kw))
+        scope.statements.append(Statement(op=op, line=line, **kw))
 
     # Opcode extenders, e.g. chain(n) or read(e): attached with no space.
     # Only letters from E/N/P/H count, so chain(custno) is still a key.
-    if word in _KEYED_OPS | _FILE_ONLY_OPS | {"delete"} and rest.startswith("("):
+    if word in _KEYED_OPS | _FILE_ONLY_OPS | {"delete", "callp"} and rest.startswith("("):
         em = re.match(r"^\(([a-zA-Z ]*)\)", rest)
         letters = set(em.group(1).lower().replace(" ", "")) if em else set()
         if em and letters and letters <= set("enph"):
@@ -388,18 +408,33 @@ def _statement(state: _State, text: str, line: int) -> None:
         raise RpgleError(f"{word}: {_UNSUPPORTED[word]}")
     if word == "ctl-opt":
         return
+    if word == "dcl-proc":
+        return _open_proc(state, rest.strip())
+    if word == "end-proc":
+        if state.proc is None:
+            raise RpgleError("end-proc with no dcl-proc")
+        prog.procs.append(state.proc)
+        state.proc = None
+        return
+    if word == "dcl-pi":
+        return _open_pi(state, rest.strip())
+    if word == "dcl-pr":
+        state.in_pr = True
+        return
     if word == "dcl-s":
-        return _parse_dcl_s(prog, rest)
+        return _parse_dcl_s(scope, state.visible_dspecs(), rest)
     if word == "dcl-ds":
-        state.open_ds = _parse_dcl_ds(prog, rest.strip())
+        state.open_ds = _parse_dcl_ds(scope, rest.strip())
         return
     if word == "clear":
         if not rest:
             raise RpgleError("clear needs a variable or data structure")
         return add("CLEAR", expr=rest)
     if word == "dcl-c":
-        return _parse_dcl_c(prog, rest)
+        return _parse_dcl_c(scope, rest)
     if word == "dcl-f":
+        if state.proc is not None:
+            raise RpgleError("dcl-f inside a procedure is not supported: declare files at the top of the program")
         return _parse_dcl_f(prog, rest)
 
     if word in ("if", "elseif", "dow", "dou", "when"):
@@ -451,13 +486,69 @@ def _statement(state: _State, text: str, line: int) -> None:
             raise RpgleError(f"{word} takes a file or record format name, then optionally a data structure; got {rest!r}")
         return add(word.upper(), factor2=fm.group(1), ds=fm.group(2))
 
+    if word == "callp":
+        return _add_call(add, rest)
     body = rest if word == "eval" else text
     found = _find_assignment(body)
     if found is None:
+        if re.match(r"^[A-Za-z_]\w*\s*\(.*\)$", text, re.DOTALL):
+            return _add_call(add, text)  # a bare call: name(args);
         raise RpgleError(f"unrecognized statement: {text!r}")
     target, op, value = found
     expr = f"{target} = {value}" if not op else f"{target} = {target} {op} ({value})"
     add("EVAL", expr=expr)
+
+
+def _add_call(add, text: str) -> None:
+    cm = re.match(r"^\s*([A-Za-z_]\w*)\s*\((.*)\)\s*$", text, re.DOTALL)
+    if not cm:
+        raise RpgleError(f"a procedure call looks like name(arg : arg); got {text!r}")
+    add("CALLP", expr=f"{cm.group(1)}({cm.group(2)})")
+
+
+def _open_proc(state: _State, rest: str) -> None:
+    if state.proc is not None:
+        raise RpgleError(f"dcl-proc inside procedure {state.proc.name}; is its end-proc missing?")
+    words = rest.split()
+    if not words:
+        raise RpgleError("dcl-proc needs a name")
+    extra = [w.lower() for w in words[1:]]
+    if any(w != "export" for w in extra):
+        raise RpgleError(f"dcl-proc {words[0]}: {' '.join(extra)} is not supported")
+    if any(p.name.lower() == words[0].lower() for p in state.prog.procs):
+        raise RpgleError(f"procedure {words[0]} is declared twice")
+    state.proc = ProcSpec(name=words[0], export="export" in extra)
+
+
+def _open_pi(state: _State, rest: str) -> None:
+    if state.proc is None:
+        raise RpgleError("dcl-pi outside a procedure (parameters of the main program are not supported)")
+    if state.proc.params or state.proc.returns:
+        raise RpgleError(f"procedure {state.proc.name} has two dcl-pi blocks")
+    parts = rest.split(None, 1)
+    if not parts:
+        raise RpgleError("dcl-pi needs a name (or *n)")
+    if len(parts) == 2 and parts[1].strip():
+        ret = _make_dspec(state.visible_dspecs(), f"_return {parts[1]}", "return type")
+        state.proc.returns = ret
+    state.in_pi = True
+
+
+def _add_param(state: _State, text: str) -> None:
+    proc = state.proc
+    spec = _make_dspec(state.visible_dspecs(), text, "parameter")
+    low = text.lower()
+    mode = "value" if re.search(r"\bvalue\b", low) else "const" if re.search(r"\bconst\b", low) else "ref"
+    nopass = False
+    om = re.search(r"\boptions\s*\(([^)]*)\)", low)
+    if om:
+        opts = {o.strip() for o in om.group(1).split(":")}
+        if opts - {"*nopass"}:
+            raise RpgleError(f"parameter {spec.name}: options({', '.join(sorted(opts - {'*nopass'}))}) is not supported")
+        nopass = True
+    if any(p.spec.name.lower() == spec.name.lower() for p in proc.params):
+        raise RpgleError(f"parameter {spec.name} is declared twice")
+    proc.params.append(ParamSpec(spec=spec, mode=mode, nopass=nopass))
 
 
 def parse_free(source: str) -> Program:
@@ -472,4 +563,8 @@ def parse_free(source: str) -> Program:
             raise RpgleError(f"line {line}: {e}") from None
     if state.open_ds is not None:
         raise RpgleError(f"data structure {state.open_ds.name} is missing its end-ds")
+    if state.in_pi or state.in_pr:  # the innermost unclosed block is the likely culprit
+        raise RpgleError("a dcl-pi or dcl-pr is missing its end-pi or end-pr")
+    if state.proc is not None:
+        raise RpgleError(f"procedure {state.proc.name} is missing its end-proc")
     return state.prog

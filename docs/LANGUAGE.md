@@ -90,10 +90,11 @@ A statement is everything up to a semicolon: it can span lines, and several can 
 
 | Area | Supported |
 |---|---|
-| Declarations | `ctl-opt` (ignored), `dcl-s`, `dcl-c`, `dcl-f`, `dcl-ds` (see "Data structures") |
+| Declarations | `ctl-opt` (ignored), `dcl-s`, `dcl-c`, `dcl-f`, `dcl-ds` (see "Data structures"), `dcl-proc`/`dcl-pi` (see "Procedures"), `dcl-pr` (parsed and skipped) |
 | Types | `char`, `varchar` (no padding, `%LEN` is its content length, truncated at its declared size), `ind`, `int`, `uns`, `packed`, `zoned`, `bindec`, `float`, `like(x)` of an earlier `dcl-s`; `inz` with a value, `*blank`, `*zero`, `*on`, `*off` |
 | Control flow | `if`/`elseif`/`else`/`endif`, `dow`, `dou`, `enddo`, `for ... to\|downto ... by`/`endfor`, `select`/`when`/`other`/`endsl`, `leave`, `iter`, `return` |
 | Subroutines | `begsr`, `endsr`, `exsr` |
+| Calls | `callp name(args);` or just `name(args);`, and `name(args)` inside any expression |
 | Other | `clear` a variable or a whole data structure |
 | Assignment | `x = expr;`  `x += expr;` (also `-=` `*=` `/=`)  `eval x = expr;`  `*in03 = *on;` |
 | Files | `chain` `setll` `setgt` `read` `reade` `readp` `readpe` `write` `update` `delete` `exfmt`; keys can be an expression or a list: `chain (cust : ord) orders;` |
@@ -109,7 +110,7 @@ A statement is everything up to a semicolon: it can span lines, and several can 
 
 **Opcode extenders** `(n)`, `(p)`, `(h)` are accepted and ignored. `(e)` raises an error, since it needs `%ERROR`.
 
-Not supported yet, and each raises an error naming the line rather than being skipped: `dcl-proc`/`dcl-pi`/`dcl-pr`, `callp`, arrays (`dim`), date/time types, `monitor`, `reset`, `/copy`, `dcl-f` keywords other than the device, `keyed` and `usage`. Mixed source (`/free ... /end-free` blocks inside fixed-form) is not supported either: the whole file is one or the other.
+Not supported yet, and each raises an error naming the line rather than being skipped: arrays (`dim`), external procedures and programs (`CALL`, `extproc`, `extpgm`), date/time types, `monitor`, `reset`, `/copy`, `dcl-f` keywords other than the device, `keyed` and `usage`. Mixed source (`/free ... /end-free` blocks inside fixed-form) is not supported either: the whole file is one or the other.
 
 ### Data structures
 
@@ -128,6 +129,38 @@ A data structure's layout comes from one of: its own subfield lines (`dcl-ds ...
 Each subfield is its own program variable. `qualified` structures name them `cust.name`; unqualified ones are just `name`, which is how a plain `dcl-ds` with subfields has always worked. `chain`, `read`, `reade`, `write` and `update` take a data structure as a trailing operand, and the subfield names must match the record's field names. `clear cust` blanks every character subfield and zeroes every number.
 
 The limit worth knowing: a data structure is a *group of variables*, not a block of memory. There is no `pos()`, `overlay()` or `samepos()` (they raise an error), no `%size(ds)`, no assigning one data structure to another (`a = b`), no `eval-corr`, and no data structure as a subfield of another. A data structure's name on its own isn't a variable, so `chain k file cust` works but `msg = cust` doesn't. Arrays of data structures (`dim`) arrive with arrays.
+
+### Procedures
+
+```
+dcl-s total packed(9:2);
+total = addtax(100);              // in an expression
+report(total);                    // as a statement (callp is optional)
+*inlr = *on;
+return;                           // end of the main line
+
+dcl-proc addtax;
+  dcl-pi *n packed(9:2);          // *n, then the return type
+    amount packed(9:2) const;
+  end-pi;
+  dcl-s rate packed(5:4) inz(0.0825);   // local to this procedure
+  return amount + amount * rate;
+end-proc;
+```
+
+Statements outside any `dcl-proc` are the main line and run first, in the order written. Procedures can be declared above or below it. A procedure called but not defined in the same source (an external program or service program) is an error: there's nothing to link to.
+
+**Parameters** follow RPG's three modes. The default is by **reference**: the procedure works on the caller's own variable, so changes show through, and the argument must be a variable. `const` is read-only and accepts a variable, a literal or an expression. `value` gets a private copy. `options(*nopass)` lets the caller leave the argument off, and the parameter then holds its default (blank or zero). `*omit` and `*varsize` are not supported. For by-reference and const-aliased parameters the kind (text or number) is checked but not the length.
+
+**Scope.** Variables declared in a procedure (`dcl-s`, `dcl-c`, `dcl-ds`) are local, start fresh on every call, and shadow a global of the same name. A procedure can read and change globals. Subroutines (`begsr`) declared in a procedure are local to it, and the main line's subroutines are not visible inside procedures. Indicators (`*INnn`, `*INLR`) are global, as in RPG, so a procedure can set `*in90` for the main line to see. `dcl-f` must be at the top of the program, not inside a procedure; files and their `%FOUND`/`%EOF` state are shared.
+
+**Return values.** `return value;` converts to the declared return type, so a `packed(5)` function returning `7 / 2` gives 3. A procedure with a return type must `return` a value or it's an error. One with no return type may be called either way and its value is ignored.
+
+**Recursion** works, with a fresh set of locals per call. The depth is bounded by Python's stack: roughly 75 levels deep when the recursion goes through expressions (`return 1 + depth(n - 1)`) and 300 or more when it goes through `callp` statements. Past that you get an error, not a crash.
+
+**Screens.** A procedure called with `callp` or as a bare statement can `exfmt`, and the screen reaches whoever is driving `run_program`, same as the main line's. A procedure called from inside an *expression* cannot, because an expression can't pause for the user, and you get an error saying to use `callp`.
+
+Not supported: procedures taking data structures as parameters, `*omit`, `export`/`import` linkage (`export` is parsed and ignored), `static` locals, main-program parameters (`dcl-pi` outside a procedure), `%PARMS`, `%ADDR`.
 
 ## DISK Files
 

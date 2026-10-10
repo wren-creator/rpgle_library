@@ -112,7 +112,7 @@ class ParseTest(unittest.TestCase):
 
     def test_errors_name_the_line(self):
         for src, fragment in [
-            ("**free\ndcl-s a packed(3);\ndcl-proc foo;\n", "line 3"),
+            ("**free\ndcl-s a packed(3);\nmonitor;\n", "line 3"),
             ("**free\ndcl-ds x;\n  a char(3);\n", "end-ds"),
             ("**free\ndcl-ds x;\n  a char(3) pos(1);\nend-ds;\n", "POS"),
             ("**free\n\nfoo bar;\n", "line 3"),

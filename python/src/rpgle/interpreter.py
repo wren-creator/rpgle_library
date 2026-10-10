@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import math
 import re
+from collections import ChainMap
 from dataclasses import dataclass, field
 from typing import Any, Generator, Optional
 
@@ -43,8 +44,8 @@ from .errors import RpgleError
 from .fileops import FILE_OPS, FileRuntime
 from .database import Database
 from .pf import PhysicalFile
-from .expr import Context, Var, as_bool, as_float, as_string, eval_expr, split_assignment
-from .rpgle import DSpec, DsSpec, Program
+from .expr import Context, Var, as_bool, as_float, as_string, eval_call, eval_expr, split_assignment
+from .rpgle import DSpec, DsSpec, ProcSpec, Program
 from ._helpers import pad_end_trunc, pad_start_zero
 
 __all__ = [
@@ -67,13 +68,13 @@ def _dspec_from_pf_field(f) -> DSpec:
     return DSpec(name=f.name, deftype="S", length=f.length, dec=f.dec if f.dtype == "N" else None)
 
 
-def _ds_layout(prog: Program, ds: DsSpec, dds: DDS, pfs: Optional[dict[str, PhysicalFile]], seen=()) -> list[DSpec]:
+def _ds_layout(dss: list[DsSpec], ds: DsSpec, dds: DDS, pfs: Optional[dict[str, PhysicalFile]], seen=()) -> list[DSpec]:
     """The subfields a data structure ends up with, wherever they come from."""
     if ds.likeds:
-        other = next((d for d in prog.dss if d.name.lower() == ds.likeds.lower()), None)
+        other = next((d for d in dss if d.name.lower() == ds.likeds.lower()), None)
         if other is None or other.name.lower() in seen or other.name.lower() == ds.name.lower():
             raise RpgleError(f"{ds.name}: LIKEDS({ds.likeds}) must name a data structure declared earlier")
-        return _ds_layout(prog, other, dds, pfs, seen + (ds.name.lower(),))
+        return _ds_layout(dss, other, dds, pfs, seen + (ds.name.lower(),))
     if ds.likerec:
         want = ds.likerec.upper()
         for pf in (pfs or {}).values():
@@ -96,16 +97,22 @@ def _ds_layout(prog: Program, ds: DsSpec, dds: DDS, pfs: Optional[dict[str, Phys
 
 
 def expand_ds(
-    prog: Program, dds: DDS, pfs: Optional[dict[str, PhysicalFile]] = None
+    prog: Program,
+    dds: DDS,
+    pfs: Optional[dict[str, PhysicalFile]] = None,
+    local: Optional[list[DsSpec]] = None,
 ) -> dict[str, list[tuple[str, DSpec]]]:
     """Every data structure's variables: {ds name (lower): [(variable
     name (lower), the subfield's DSpec), ...]}. A qualified DS's
     variables are named `ds.sub`; an unqualified one's are just `sub`.
+    With `local` (a procedure's own data structures), returns just
+    those, which may borrow layouts from the program's.
     """
     out: dict[str, list[tuple[str, DSpec]]] = {}
-    for ds in prog.dss:
+    visible = [*prog.dss, *(local or [])]
+    for ds in local if local is not None else prog.dss:
         prefix = ds.name.lower() + "." if ds.qualified else ""
-        out[ds.name.lower()] = [(prefix + sub.name.lower(), sub) for sub in _ds_layout(prog, ds, dds, pfs)]
+        out[ds.name.lower()] = [(prefix + sub.name.lower(), sub) for sub in _ds_layout(visible, ds, dds, pfs)]
     return out
 
 
@@ -386,7 +393,10 @@ def compile_program(statements) -> Compiled:
             instrs.append(Instr(op="MVR", result=stmt.result))
 
         elif op == "RETURN":
-            instrs.append(Instr(op="RETURN"))
+            instrs.append(Instr(op="RETURN", expr=stmt.expr))
+
+        elif op == "CALLP":
+            instrs.append(Instr(op="CALLP", expr=stmt.expr))
 
         elif op in FILE_OPS:
             instrs.append(
@@ -470,6 +480,14 @@ def _assign(variables: dict[str, Var], indicators: dict[str, bool], lvalue: str,
     v = variables.get(key)
     if v is None:
         raise RpgleError(f"Unknown RPG variable on assignment: {lvalue}")
+    _store(v, rvalue)
+
+
+def _store(v: Var, rvalue: Any) -> None:
+    """Puts a value into a variable the way RPG assignment does: padded
+    or truncated to a character field's length, truncated (not rounded)
+    to a number's decimals.
+    """
     if v.kind == "ind":
         v.value = "1" if as_bool(rvalue) else "0"
     elif v.kind == "varchar":
@@ -649,6 +667,7 @@ class _Frame:
     variables: Any  # dict[str, Var], or a ChainMap(locals, globals) inside a procedure
     ctx: Context
     ds_members: dict[str, list[tuple[str, DSpec]]]
+    ds_prefix: dict[str, str] = field(default_factory=dict)  # data structure -> "name." if qualified
     call_stack: list[int] = field(default_factory=list)  # EXSR return addresses
     for_state: dict[int, tuple[float, float]] = field(default_factory=dict)  # FORTEST index -> (limit, by)
 
@@ -656,10 +675,134 @@ class _Frame:
 class _Runtime:
     """State shared by every frame of one program run."""
 
-    def __init__(self, dds: DDS, indicators: dict[str, bool], files: FileRuntime):
+    def __init__(
+        self,
+        prog: Program,
+        dds: DDS,
+        pfs: Optional[dict[str, PhysicalFile]],
+        globals_: dict[str, Var],
+        indicators: dict[str, bool],
+        files: FileRuntime,
+        procs: dict[str, tuple[ProcSpec, Compiled]],
+    ):
+        self.prog = prog
         self.dds = dds
+        self.pfs = pfs
+        self.globals = globals_
         self.indicators = indicators  # global, as in RPG: *INnn and *INLR are shared by every procedure
         self.files = files
+        self.procs = procs
+        self.global_ds = expand_ds(prog, dds, pfs)
+        self.global_prefix = {d.name.lower(): (d.name.lower() + "." if d.qualified else "") for d in prog.dss}
+
+    # ── procedures ───────────────────────────────────────────────
+
+    def context(self, variables: Any) -> Context:
+        return Context(
+            vars=variables,
+            indicators=self.indicators,
+            file_status=self.files.status,
+            has_proc=lambda name: name.lower() in self.procs,
+            call_proc=self.call_value,
+        )
+
+    def main_frame(self, compiled: Compiled) -> _Frame:
+        return _Frame(
+            instrs=compiled.instrs,
+            subroutines=compiled.subroutines,
+            variables=self.globals,
+            ctx=self.context(self.globals),
+            ds_members=self.global_ds,
+            ds_prefix=self.global_prefix,
+        )
+
+    def _proc_frame(self, name: str, args: list) -> tuple[ProcSpec, _Frame]:
+        entry = self.procs.get(name.lower())
+        if entry is None:
+            raise RpgleError(f"Unknown procedure: {name}")
+        proc, compiled = entry
+        if len(args) > len(proc.params):
+            raise RpgleError(f"{proc.name} takes {len(proc.params)} parameter(s), got {len(args)}")
+
+        local: dict[str, Var] = {}
+        for i, p in enumerate(proc.params):
+            key = p.spec.name.lower()
+            if i >= len(args):
+                if not p.nopass:
+                    raise RpgleError(f"{proc.name}: missing argument for parameter {p.spec.name}")
+                local[key] = _new_var(p.spec)
+                continue
+            value, var = args[i]
+            want = "A" if p.spec.dec is None else "N"
+            if p.mode == "value" or (p.mode == "const" and var is None):
+                local[key] = _new_var(p.spec)  # a private copy (or a temporary for an expression)
+                _store(local[key], value)
+            elif var is None:
+                raise RpgleError(
+                    f"{proc.name}: parameter {p.spec.name} is passed by reference, so the argument must be a "
+                    "variable (declare the parameter const to pass an expression)"
+                )
+            elif var.type != want:
+                raise RpgleError(f"{proc.name}: parameter {p.spec.name} expects {'text' if want == 'A' else 'a number'}")
+            else:
+                local[key] = var  # the caller's own variable: changes show through
+
+        for d in proc.dspecs:
+            local[d.name.lower()] = _new_var(d)
+        local_ds = expand_ds(self.prog, self.dds, self.pfs, local=proc.dss)
+        for members in local_ds.values():
+            for key, sub in members:
+                local[key] = _new_var(sub)
+
+        variables = ChainMap(local, self.globals)  # locals shadow globals
+        return proc, _Frame(
+            instrs=compiled.instrs,
+            subroutines=compiled.subroutines,
+            variables=variables,
+            ctx=self.context(variables),
+            ds_members={**self.global_ds, **local_ds},
+            ds_prefix={**self.global_prefix, **{d.name.lower(): (d.name.lower() + "." if d.qualified else "") for d in proc.dss}},
+        )
+
+    @staticmethod
+    def _result(proc: ProcSpec, value: Any) -> Any:
+        """The RETURN value, converted to the procedure's declared type."""
+        if proc.returns is None:
+            return None
+        if value is None:
+            raise RpgleError(f"{proc.name} must RETURN a value")
+        v = _new_var(proc.returns)
+        _store(v, value)
+        return v.value == "1" if v.kind == "ind" else v.value
+
+    def call_value(self, name: str, args: list) -> Any:
+        """Calls a procedure from inside an expression. Expressions can't
+        pause for the screen, so a procedure called this way can't EXFMT.
+        """
+        proc, frame = self._proc_frame(name, args)
+        gen = self.exec(frame)
+        try:
+            next(gen)
+        except StopIteration as done:
+            return self._result(proc, done.value)
+        except RecursionError:
+            raise RpgleError(f"{proc.name}: calls nested too deeply") from None
+        gen.close()
+        raise RpgleError(
+            f"{proc.name} shows a screen (EXFMT), so it can't be called from inside an expression; "
+            "call it with CALLP instead"
+        )
+
+    def call_stmt(self, name: str, args: list) -> Generator[ScreenData, Optional[Resume], Any]:
+        """Calls a procedure as a statement (CALLP). Screens it shows
+        reach the caller of run_program, same as the main line's.
+        """
+        proc, frame = self._proc_frame(name, args)
+        try:
+            value = yield from self.exec(frame)
+        except RecursionError:
+            raise RpgleError(f"{proc.name}: calls nested too deeply") from None
+        return self._result(proc, value) if proc.returns is not None and value is not None else None
 
     def exec(self, frame: _Frame) -> Generator[ScreenData, Optional[Resume], Any]:
         """Runs one frame to its RETURN (or its end). Yields a ScreenData
@@ -799,15 +942,33 @@ class _Runtime:
                     lambda name, value: _assign(variables, indicators, name, value),
                     lambda num, on: indicators.__setitem__(num, on),
                     lambda src: eval_expr(src, ctx),
+                    frame.ds_prefix,
                 )
                 pc += 1
 
+            elif op == "CALLP":
+                name, args = eval_call(instr.expr, ctx)
+                if name.lower() not in self.procs:
+                    raise RpgleError(f"Unknown procedure: {name} (external procedures are not supported)")
+                yield from self.call_stmt(name, args)
+                pc += 1
+
             elif op == "RETURN":
-                return None
+                return eval_expr(instr.expr, ctx) if instr.expr else None
 
             else:
                 raise RpgleError(f"Unimplemented RPG instruction: {op}")
         return None
+
+
+def compile_procs(procs: list[ProcSpec]) -> dict[str, tuple[ProcSpec, Compiled]]:
+    """Compiles each procedure body separately: its own instruction
+    array and subroutine table, so subroutine names are local to it.
+    """
+    out: dict[str, tuple[ProcSpec, Compiled]] = {}
+    for p in procs:
+        out[p.name.lower()] = (p, compile_program(p.statements))
+    return out
 
 
 def _run_program(
@@ -817,12 +978,5 @@ def _run_program(
     indicators: dict[str, bool] = {}
     compiled = compile_program(prog.statements)
     files = FileRuntime(prog, db, pfs, compiled.klists)
-    ctx = Context(vars=variables, indicators=indicators, file_status=files.status)
-    main = _Frame(
-        instrs=compiled.instrs,
-        subroutines=compiled.subroutines,
-        variables=variables,
-        ctx=ctx,
-        ds_members=expand_ds(prog, dds, pfs),
-    )
-    yield from _Runtime(dds, indicators, files).exec(main)
+    rt = _Runtime(prog, dds, pfs, variables, indicators, files, compile_procs(prog.procs))
+    yield from rt.exec(rt.main_frame(compiled))

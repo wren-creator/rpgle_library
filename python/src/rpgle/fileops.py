@@ -135,15 +135,17 @@ class FileRuntime:
         assign: Callable[[str, Any], None],
         set_ind: Callable[[str, bool], None],
         evaluate: Callable[[str], Any],
+        ds_prefix: Optional[dict[str, str]] = None,
     ) -> None:
         h = self._resolve(instr.factor2)
         self._last = h
         op = instr.op
         prefix = ""
         if instr.ds:
-            if instr.ds.lower() not in self._ds_prefix:
+            known = self._ds_prefix if ds_prefix is None else ds_prefix
+            if instr.ds.lower() not in known:
                 raise RpgleError(f"{instr.ds} is not a data structure")
-            prefix = self._ds_prefix[instr.ds.lower()]
+            prefix = known[instr.ds.lower()]
         hi = lo = eq = False  # what each indicator column will be set to
         try:
             if op == "CHAIN":

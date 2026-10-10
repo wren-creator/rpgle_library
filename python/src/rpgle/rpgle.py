@@ -82,6 +82,35 @@ class DsSpec:
 
 
 @dataclass
+class ParamSpec:
+    """One procedure parameter. mode is how the caller's argument is
+    passed: "ref" (the default: the procedure sees and can change the
+    caller's variable), "const" (read-only, so an expression is fine),
+    or "value" (a private copy).
+    """
+
+    spec: DSpec
+    mode: str = "ref"
+    nopass: bool = False  # options(*nopass): the caller may leave it off
+
+
+@dataclass
+class ProcSpec:
+    """A free-form procedure (dcl-proc ... end-proc). Its statements are
+    kept apart from the main line, and its dcl-s/dcl-ds declarations are
+    local to it.
+    """
+
+    name: str
+    export: bool = False
+    params: list[ParamSpec] = field(default_factory=list)
+    returns: Optional[DSpec] = None
+    dspecs: list[DSpec] = field(default_factory=list)
+    dss: list[DsSpec] = field(default_factory=list)
+    statements: list["Statement"] = field(default_factory=list)
+
+
+@dataclass
 class Statement:
     """One C-spec line, tokenized but not yet control-flow resolved
     (that happens in interpreter.compile_program).
@@ -116,6 +145,7 @@ class Program:
     files: list[FileSpec] = field(default_factory=list)  # every F-spec, source order
     dspecs: list[DSpec] = field(default_factory=list)
     dss: list[DsSpec] = field(default_factory=list)  # free-form data structures
+    procs: list[ProcSpec] = field(default_factory=list)  # free-form procedures
     statements: list[Statement] = field(default_factory=list)
 
 
