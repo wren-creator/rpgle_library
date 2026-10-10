@@ -104,6 +104,15 @@ def drive(
 
     gen = run_program(prog, dds, db, pfs)
     try:
+        return _drive_loop(gen, stdin, stdout, out)
+    finally:
+        # Close the program (which commits its file changes) while the
+        # caller still has the database open, not at garbage collection.
+        gen.close()
+
+
+def _drive_loop(gen, stdin: TextIO, stdout: TextIO, out) -> int:
+    try:
         screen = next(gen)
     except StopIteration:
         out("(program ended)")
@@ -234,6 +243,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         finally:
             if db is not None:
                 db.close()
+    except KeyboardInterrupt:
+        print("\n(interrupted)", file=sys.stderr)
+        return 130
     except (OSError, RpgleError) as e:
         print(f"rpgle: {e}", file=sys.stderr)
         return 1

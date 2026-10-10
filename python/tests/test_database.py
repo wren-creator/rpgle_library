@@ -249,6 +249,11 @@ class DatabaseTest(unittest.TestCase):
             with self.assertRaises(RpgleError):
                 db3.open_file(other)
 
+    def test_commit_after_close_is_harmless(self):
+        db = Database()
+        db.close()
+        db.commit()
+
     def test_file_not_open(self):
         db = Database()
         self.addCleanup(db.close)

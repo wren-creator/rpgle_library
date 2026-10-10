@@ -310,7 +310,11 @@ class Database:
             raise RpgleError(f"File {name} is not open") from None
 
     def commit(self) -> None:
-        self._conn.commit()
+        """Commits pending changes. A no-op once the database is closed."""
+        try:
+            self._conn.commit()
+        except sqlite3.ProgrammingError:
+            pass  # already closed
 
     def close(self) -> None:
         """Commits and closes. Safe to call more than once."""

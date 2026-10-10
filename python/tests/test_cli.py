@@ -1,3 +1,4 @@
+import contextlib
 import io
 import pathlib
 import tempfile
@@ -122,6 +123,24 @@ class DiskCliTest(unittest.TestCase):
         code, out = self._main(["run", str(self.progs / "custinq.rpgle"), "--db", self.db], "99\nF3\n")
         self.assertEqual(code, 0)
         self.assertIn("Customer not found", out)
+
+    def test_ctrl_c_exits_quietly_and_keeps_earlier_changes(self):
+        self._load()
+
+        class Interrupting:
+            def readline(self):
+                raise KeyboardInterrupt
+
+        old = self._sys.stdin
+        self._sys.stdin = Interrupting()
+        err = io.StringIO()
+        try:
+            with self._redirect(io.StringIO()), contextlib.redirect_stderr(err):
+                code = main(["run", str(self.progs / "custinq.rpgle"), "--db", self.db])
+        finally:
+            self._sys.stdin = old
+        self.assertEqual(code, 130)
+        self.assertNotIn("Traceback", err.getvalue())
 
     def test_disk_program_without_db_is_an_error(self):
         code, _ = self._main(["run", str(self.progs / "custinq.rpgle")])
