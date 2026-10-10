@@ -174,6 +174,17 @@ Python has native generators, just like JS, so this port didn't need Go's gorout
 
 ---
 
+## Roadmap
+
+Goal: run and test RPG IV logic on Linux, macOS or Windows, with no IBM i license. The Python port leads; JS and Go follow once a feature settles.
+
+- [x] **1. A real runner.** `rpgle run prog.rpgle` draws each screen on a terminal (Python)
+- [ ] **2. `DISK` file I/O on SQLite.** Multi-file F-specs, `CHAIN`, `READ`, `READE`, `SETLL`, `WRITE`, `UPDATE`, `DELETE`, `%EOF`, `%FOUND`, `%EQUAL`
+- [ ] **3. Free-form RPG.** `**FREE`, `DCL-S`, `DCL-DS`, `DCL-PR`/`DCL-PI`, `DCL-PROC`, `DCL-F`, built-in functions
+- [ ] **4. Calls and structures.** Data structures, arrays, `CALL`/`CALLP`, `/COPY`, `PRINTER` files
+
+This will not be a drop-in replacement for the IBM compiler. System APIs, CL, data areas, job and spool behavior, and ILE binding are out of scope. The pitch is run, test and port RPG logic anywhere, not replace IBM i.
+
 ## Publishing
 
 See [`docs/PUBLISHING.md`](./docs/PUBLISHING.md).

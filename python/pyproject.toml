@@ -17,6 +17,9 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 
+[project.scripts]
+rpgle = "rpgle.cli:main"
+
 [project.urls]
 Homepage = "https://github.com/wren-creator/rpgle_library#readme"
 Repository = "https://github.com/wren-creator/rpgle_library"

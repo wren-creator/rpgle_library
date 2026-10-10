@@ -33,6 +33,19 @@ Run it yourself: `python examples/quick_math.py` (minimal, no display file at al
 
 ---
 
+## Running a program: the `rpgle` command
+
+Installing the package gives you an `rpgle` command (or use `python -m rpgle`):
+
+```bash
+rpgle run programs/sales-report.rpgle                  # picks up sales-report.dspf next to it
+rpgle run programs/adventure.rpgle --dspf my.dspf      # or name the display file
+```
+
+Each `EXFMT` is drawn as a 24x80 grid, then it prompts for each input field (press Enter to keep the value shown). Type a function key like `F3` at any prompt to send that key, if the current format declares it. It reads plain stdin and writes plain stdout, so it works over SSH, in a pipe, and in CI. The program ends when the RPG does, or when input runs out.
+
+---
+
 ## Why Generators, Not Goroutines
 
 The JS port's `runProgram()` is a generator: it `yield`s at every `EXFMT` and resumes via `.next(resume)`. The Go port had to reach for a goroutine + channel pair instead, specifically *because* Go has no generators. Python doesn't have that problem — it has native generators just like JS — so `run_program()` here is a near 1:1 translation of the original JS generator, resumed with `.send(resume)` instead of `.next(resume)`. No thread or channel plumbing anywhere in this port.
