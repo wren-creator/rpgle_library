@@ -138,6 +138,22 @@ class Var:
 
 
 @dataclass
+class ArrayVar:
+    """An array. Each element is its own variable, so elements keep
+    their own length and decimals. For an array of data structures
+    each element is instead a dict of subfield name (lower-case) to Var.
+    """
+
+    elems: list[Any]
+
+    def at(self, index: Any, name: str) -> Any:
+        i = int(as_float(index))
+        if not 1 <= i <= len(self.elems):
+            raise RpgleError(f"{name}({i}) is out of range: the array has {len(self.elems)} element(s), numbered from 1")
+        return self.elems[i - 1]
+
+
+@dataclass
 class Context:
     """The variable/indicator state an expression is evaluated against."""
 
@@ -168,6 +184,13 @@ def _tokenize(src: str) -> list[_Token]:
         c = src[i]
         if c.isspace():
             i += 1
+            continue
+        if c == "." and tokens and tokens[-1].type == "op" and tokens[-1].value == ")" and src[i + 1 : i + 2].isalpha():
+            j = i + 1
+            while j < n and (src[j].isalnum() or src[j] == "_"):
+                j += 1
+            tokens.append(_Token("member", src[i + 1 : j]))  # items(i).qty
+            i = j
             continue
         if c == "'":
             j = i + 1
@@ -402,6 +425,7 @@ class _Parser:
         self.tokens = tokens
         self.pos = 0
         self.ctx = ctx
+        self._last_ref: Optional[tuple[int, int, Any]] = None
 
     def _peek(self) -> Optional[_Token]:
         return self.tokens[self.pos] if self.pos < len(self.tokens) else None
@@ -510,10 +534,23 @@ class _Parser:
         if t.type == "func":
             return self._parse_func_call(t.value)
         if t.type == "name":
+            start = self.pos - 1
             nxt = self._peek()
-            if nxt and nxt.type == "op" and nxt.value == "(" and self.ctx.has_proc and self.ctx.has_proc(t.value):
+            is_array = isinstance(self.ctx.vars.get(t.value.lower()), ArrayVar)
+            if (
+                nxt
+                and nxt.type == "op"
+                and nxt.value == "("
+                and not is_array
+                and self.ctx.has_proc
+                and self.ctx.has_proc(t.value)
+            ):
                 return self.ctx.call_proc(t.value, self._parse_call_args())
-            return self._read_var(t.value)
+            ref = self._parse_ref(t.value)
+            self._last_ref = (start, self.pos, ref)
+            if isinstance(ref, ArrayVar):
+                raise RpgleError(f"{t.value} is an array: use {t.value}(index), or %ELEM / %LOOKUP / SORTA")
+            return ref.value == "1" if ref.kind == "ind" else ref.value
         if t.type == "op" and t.value == "(":
             v = self.parse_expr()
             self._expect_op(")")
@@ -530,6 +567,10 @@ class _Parser:
         m = _IN_NUM_RE.match(name)
         if m:
             return bool(self.ctx.indicators.get(m.group(1), False))
+        if name in ("*BLANK", "*BLANKS"):
+            return ""
+        if name in ("*ZERO", "*ZEROS"):
+            return 0.0
         raise RpgleError(f"Unsupported RPG figurative constant: {name}")
 
     def _parse_call_args(self) -> list[tuple[Any, Any]]:
@@ -545,11 +586,22 @@ class _Parser:
             return args
         while True:
             first = self._peek()
-            before = self.pos
-            value = self.parse_expr()
-            var = None
-            if self.pos - before == 1 and first is not None and first.type == "name":
-                var = self.ctx.vars.get(first.value.lower())
+            second = self.tokens[self.pos + 1] if self.pos + 1 < len(self.tokens) else None
+            bare_array = (
+                first is not None
+                and first.type == "name"
+                and isinstance(self.ctx.vars.get(first.value.lower()), ArrayVar)
+                and second is not None
+                and second.type == "op"
+                and second.value in (":", ")")
+            )
+            if bare_array:  # a whole array passed along: nothing to evaluate
+                self._next()
+                value, var = None, self.ctx.vars[first.value.lower()]
+            else:
+                before = self.pos
+                value = self.parse_expr()
+                var = self._ref_for(before)
             args.append((value, var))
             t = self._next()
             if t is None:
@@ -579,30 +631,105 @@ class _Parser:
     def _parse_func_call(self, name: str) -> Any:
         if name in ("%EOF", "%FOUND", "%EQUAL"):
             return self._parse_file_status(name)
+        if name == "%ELEM":
+            return self._parse_elem()
+        if name == "%LOOKUP":
+            return self._parse_lookup()
         fn = _BIFS.get(name)
         if fn is None:
             raise RpgleError(f"Unsupported RPG built-in: {name}")
         self._expect_op("(")
         # Remember if the first argument is a bare variable: %CHAR needs
         # its declared decimals, which the value alone doesn't carry.
-        first = self._peek()
         before = self.pos
         args = [self.parse_expr()]
-        first_var = None
-        if self.pos - before == 1 and first is not None and first.type == "name":
-            first_var = self.ctx.vars.get(first.value.lower())
+        first_var = self._ref_for(before)
+        if not isinstance(first_var, Var):
+            first_var = None
         while (t := self._peek()) and t.type == "op" and t.value == ":":
             self._next()
             args.append(self.parse_expr())
         self._expect_op(")")
         return fn(name, args, first_var)
 
-    def _read_var(self, name: str) -> Any:
-        key = name.lower()
-        v = self.ctx.vars.get(key)
+    def _ref_for(self, start: int) -> Any:
+        """The variable the tokens from `start` to here were, if they were
+        exactly one variable reference (name, or name(i), or name(i).sub),
+        else None. %CHAR and by-reference arguments need the variable
+        itself, not just its value.
+        """
+        last = getattr(self, "_last_ref", None)
+        if last is not None and last[0] == start and last[1] == self.pos:
+            return last[2]
+        return None
+
+    def _parse_ref(self, name: str, whole_ds: bool = False) -> Any:
+        """A variable reference starting at the name just consumed: the
+        Var (or ArrayVar when there's no subscript). Handles name(i) and
+        name(i).sub for arrays of data structures.
+        """
+        v = self.ctx.vars.get(name.lower())
         if v is None:
             raise RpgleError(f"Unknown RPG variable: {name}")
-        return v.value == "1" if v.kind == "ind" else v.value
+        t = self._peek()
+        if not (isinstance(v, ArrayVar) and t and t.type == "op" and t.value == "("):
+            return v
+        self._next()
+        index = self.parse_expr()
+        self._expect_op(")")
+        elem = v.at(index, name)
+        m = self._peek()
+        if m is not None and m.type == "member":
+            self._next()
+            if not isinstance(elem, dict):
+                raise RpgleError(f"{name}(i) has no subfields")
+            sub = elem.get(m.value.lower())
+            if sub is None:
+                raise RpgleError(f"{name}(i) has no subfield {m.value}")
+            return sub
+        if isinstance(elem, dict) and not whole_ds:
+            raise RpgleError(f"{name}(i) is a data structure: name a subfield, as in {name}(i).field")
+        return elem
+
+    def _parse_array_name(self, bif: str) -> ArrayVar:
+        t = self._next()
+        arr = self.ctx.vars.get(t.value.lower()) if t is not None and t.type == "name" else None
+        if not isinstance(arr, ArrayVar):
+            raise RpgleError(f"{bif} needs an array name")
+        return arr
+
+    def _parse_elem(self) -> float:
+        self._expect_op("(")
+        arr = self._parse_array_name("%ELEM")
+        self._expect_op(")")
+        return float(len(arr.elems))
+
+    def _parse_lookup(self) -> float:
+        """%LOOKUP(value : array [: start [: count]]) -> 1-based index of
+        the first element equal to value (blank-insensitive), or 0.
+        """
+        self._expect_op("(")
+        needle = self.parse_expr()
+        self._expect_op(":")
+        arr = self._parse_array_name("%LOOKUP")
+        start, count = 1, len(arr.elems)
+        t = self._peek()
+        if t and t.type == "op" and t.value == ":":
+            self._next()
+            start = int(as_float(self.parse_expr()))
+            t = self._peek()
+            if t and t.type == "op" and t.value == ":":
+                self._next()
+                count = int(as_float(self.parse_expr()))
+        self._expect_op(")")
+        if arr.elems and isinstance(arr.elems[0], dict):
+            raise RpgleError("%LOOKUP of an array of data structures is not supported yet")
+        for i in range(max(start, 1), min(start + count, len(arr.elems) + 1)):
+            elem = arr.elems[i - 1]
+            value = elem.value == "1" if elem.kind == "ind" else elem.value
+            if _kind(value) == _kind(needle) and _values_equal(value, needle):
+                return float(i)
+        return 0.0
 
 
 def eval_expr(src: str, ctx: Context) -> Any:
@@ -615,6 +742,22 @@ def eval_expr(src: str, ctx: Context) -> Any:
     if parser.pos < len(tokens):
         raise RpgleError(f"Trailing tokens in RPG expression: {src!r}")
     return v
+
+
+def resolve_target(src: str, ctx: Context, whole_ds: bool = False) -> Any:
+    """The variable an assignment target names: x, arr(i), items(i).qty.
+    Returns a Var, or an ArrayVar for a whole array. With whole_ds, a
+    data structure element, items(i), comes back as its {subfield: Var}
+    dict (CLEAR uses that).
+    """
+    tokens = _tokenize(src)
+    if not tokens or tokens[0].type != "name":
+        raise RpgleError(f"Not something that can be assigned to: {src!r}")
+    parser = _Parser(tokens[1:], ctx)
+    ref = parser._parse_ref(tokens[0].value, whole_ds)
+    if parser.pos < len(parser.tokens):
+        raise RpgleError(f"Trailing tokens in assignment target: {src!r}")
+    return ref
 
 
 def eval_call(src: str, ctx: Context) -> tuple[str, list[tuple[Any, Any]]]:

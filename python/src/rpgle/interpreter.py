@@ -33,6 +33,7 @@ earliest versions.
 
 from __future__ import annotations
 
+import copy
 import math
 import re
 from collections import ChainMap
@@ -44,7 +45,7 @@ from .errors import RpgleError
 from .fileops import FILE_OPS, FileRuntime
 from .database import Database
 from .pf import PhysicalFile
-from .expr import Context, Var, as_bool, as_float, as_string, eval_call, eval_expr, split_assignment
+from .expr import ArrayVar, Context, Var, as_bool, as_float, as_string, eval_call, eval_expr, resolve_target, split_assignment
 from .rpgle import DSpec, DsSpec, ProcSpec, Program
 from ._helpers import pad_end_trunc, pad_start_zero
 
@@ -111,12 +112,24 @@ def expand_ds(
     out: dict[str, list[tuple[str, DSpec]]] = {}
     visible = [*prog.dss, *(local or [])]
     for ds in local if local is not None else prog.dss:
+        if ds.dim:
+            continue  # an array of data structures is one ArrayVar, see _new_ds_array
         prefix = ds.name.lower() + "." if ds.qualified else ""
         out[ds.name.lower()] = [(prefix + sub.name.lower(), sub) for sub in _ds_layout(visible, ds, dds, pfs)]
     return out
 
 
-def _new_var(d: DSpec) -> Var:
+def _new_ds_array(prog: Program, ds: DsSpec, dds: DDS, pfs, visible: list[DsSpec]) -> ArrayVar:
+    """An array of data structures: one {subfield: Var} per element."""
+    layout = _ds_layout(visible, ds, dds, pfs)
+    return ArrayVar([{sub.name.lower(): _new_var(sub) for sub in layout} for _ in range(ds.dim)])
+
+
+def _new_var(d: DSpec) -> Any:
+    """A fresh variable for a declaration: a Var, or an ArrayVar when it has dim()."""
+    if d.dim:
+        scalar = DSpec(name=d.name, deftype=d.deftype, length=d.length, dec=d.dec, init=d.init, kind=d.kind)
+        return ArrayVar([_new_var(scalar) for _ in range(d.dim)])
     if d.dec is None:
         init = d.init.strip("'") if d.init is not None else ""
         value = init[: d.length] if d.kind == "varchar" else pad_end_trunc(init, d.length)
@@ -168,6 +181,9 @@ def build_vars(prog: Program, dds: DDS, pfs: Optional[dict[str, PhysicalFile]] =
     for members in expand_ds(prog, dds, pfs).values():
         for key, sub in members:
             variables.setdefault(key, _new_var(sub))
+    for ds in prog.dss:
+        if ds.dim:
+            variables.setdefault(ds.name.lower(), _new_ds_array(prog, ds, dds, pfs, prog.dss))
 
     return variables
 
@@ -414,6 +430,9 @@ def compile_program(statements) -> Compiled:
         elif op == "CLEAR":
             instrs.append(Instr(op="CLEAR", expr=stmt.expr))
 
+        elif op == "SORTA":
+            instrs.append(Instr(op="SORTA", expr=stmt.expr, down=stmt.down))
+
         elif op == "KLIST":
             current_klist = (stmt.factor1 or "").upper()
             klists[current_klist] = []
@@ -501,22 +520,87 @@ def _store(v: Var, rvalue: Any) -> None:
         v.value = math.trunc(as_float(rvalue) * factor) / factor
 
 
-def _clear(target: str, variables: dict[str, Var], ds_members: dict[str, list[tuple[str, DSpec]]]) -> None:
+def _eval_assign(lvalue: str, rvalue_src: str, ctx: Context, variables: Any, indicators: dict[str, bool]) -> None:
+    """EVAL / assignment. Handles plain variables and indicators, array
+    elements and subfields (arr(i), items(i).qty), and whole arrays.
+    """
+    target = None
+    if "(" in lvalue:
+        target = resolve_target(lvalue, ctx)
+    else:
+        v = variables.get(lvalue.strip().lower())
+        if isinstance(v, ArrayVar):
+            target = v
+    if target is None:
+        _assign(variables, indicators, lvalue, eval_expr(rvalue_src, ctx))
+    elif isinstance(target, ArrayVar):
+        _assign_array(target, lvalue, rvalue_src, ctx)
+    else:
+        _store(target, eval_expr(rvalue_src, ctx))
+
+
+def _assign_array(target: ArrayVar, lvalue: str, rvalue_src: str, ctx: Context) -> None:
+    """arr = other (same size), or arr = scalar / *BLANKS / *ZEROS (every element)."""
+    if any(isinstance(e, dict) for e in target.elems):
+        raise RpgleError(f"{lvalue}: assigning a whole array of data structures is not supported")
+    other = ctx.vars.get(rvalue_src.strip().lower())
+    if isinstance(other, ArrayVar):
+        if len(other.elems) != len(target.elems):
+            raise RpgleError(f"{lvalue} has {len(target.elems)} elements but {rvalue_src.strip()} has {len(other.elems)}")
+        for dst, src in zip(target.elems, other.elems):
+            _store(dst, src.value == "1" if src.kind == "ind" else src.value)
+        return
+    value = eval_expr(rvalue_src, ctx)
+    for e in target.elems:
+        _store(e, value)
+
+
+def _clear_var(v: Var) -> None:
+    if v.kind == "ind":
+        v.value = "0"
+    elif v.type == "A":
+        v.value = "" if v.kind == "varchar" else " " * v.length
+    else:
+        v.value = 0.0
+
+
+def _clear(
+    target: str, variables: Any, ds_members: dict[str, list[tuple[str, DSpec]]], ctx: Context
+) -> None:
     """CLEAR: character fields to blanks, numbers to zero, indicators to
-    off. Naming a data structure clears every subfield.
+    off. Naming a data structure or an array clears everything in it.
     """
     name = target.strip().lower()
+    if "(" in name:
+        found = resolve_target(target, ctx, whole_ds=True)
+        for v in found.values() if isinstance(found, dict) else [found]:
+            _clear_var(v)
+        return
     keys = [k for k, _ in ds_members[name]] if name in ds_members else [name]
     for key in keys:
         v = variables.get(key)
         if v is None:
             raise RpgleError(f"CLEAR: unknown variable {target}")
-        if v.kind == "ind":
-            v.value = "0"
-        elif v.type == "A":
-            v.value = "" if v.kind == "varchar" else " " * v.length
+        if isinstance(v, ArrayVar):
+            for e in v.elems:
+                for item in (e.values() if isinstance(e, dict) else [e]):
+                    _clear_var(item)
         else:
-            v.value = 0.0
+            _clear_var(v)
+
+
+def _sort_array(arr: Any, name: str, descending: bool) -> None:
+    if not isinstance(arr, ArrayVar):
+        raise RpgleError(f"SORTA: {name} is not an array")
+    if any(isinstance(e, dict) for e in arr.elems):
+        raise RpgleError("SORTA: sorting an array of data structures is not supported yet")
+    values = sorted(
+        (e.value for e in arr.elems),
+        key=lambda v: v.rstrip() if isinstance(v, str) else v,
+        reverse=descending,
+    )
+    for e, v in zip(arr.elems, values):
+        e.value = v
 
 
 def _format_field_text(v: Var) -> str:
@@ -693,7 +777,7 @@ class _Runtime:
         self.files = files
         self.procs = procs
         self.global_ds = expand_ds(prog, dds, pfs)
-        self.global_prefix = {d.name.lower(): (d.name.lower() + "." if d.qualified else "") for d in prog.dss}
+        self.global_prefix = {d.name.lower(): (d.name.lower() + "." if d.qualified else "") for d in prog.dss if not d.dim}
 
     # ── procedures ───────────────────────────────────────────────
 
@@ -734,6 +818,17 @@ class _Runtime:
                 continue
             value, var = args[i]
             want = "A" if p.spec.dec is None else "N"
+            if p.spec.dim:
+                if not isinstance(var, ArrayVar):
+                    raise RpgleError(f"{proc.name}: parameter {p.spec.name} is an array: pass a whole array")
+                if len(var.elems) != p.spec.dim:
+                    raise RpgleError(
+                        f"{proc.name}: parameter {p.spec.name} is dim({p.spec.dim}) but the array passed has {len(var.elems)} elements"
+                    )
+                local[key] = copy.deepcopy(var) if p.mode == "value" else var
+                continue
+            if isinstance(var, ArrayVar):
+                raise RpgleError(f"{proc.name}: parameter {p.spec.name} takes a single value, not an array")
             if p.mode == "value" or (p.mode == "const" and var is None):
                 local[key] = _new_var(p.spec)  # a private copy (or a temporary for an expression)
                 _store(local[key], value)
@@ -753,6 +848,9 @@ class _Runtime:
         for members in local_ds.values():
             for key, sub in members:
                 local[key] = _new_var(sub)
+        for d in proc.dss:
+            if d.dim:
+                local[d.name.lower()] = _new_ds_array(self.prog, d, self.dds, self.pfs, [*self.prog.dss, *proc.dss])
 
         variables = ChainMap(local, self.globals)  # locals shadow globals
         return proc, _Frame(
@@ -761,7 +859,10 @@ class _Runtime:
             variables=variables,
             ctx=self.context(variables),
             ds_members={**self.global_ds, **local_ds},
-            ds_prefix={**self.global_prefix, **{d.name.lower(): (d.name.lower() + "." if d.qualified else "") for d in proc.dss}},
+            ds_prefix={
+                **self.global_prefix,
+                **{d.name.lower(): (d.name.lower() + "." if d.qualified else "") for d in proc.dss if not d.dim},
+            },
         )
 
     @staticmethod
@@ -835,8 +936,7 @@ class _Runtime:
 
             elif op == "EVAL":
                 lvalue, rvalue_src = split_assignment(instr.expr)
-                rvalue = eval_expr(rvalue_src, ctx)
-                _assign(variables, indicators, lvalue, rvalue)
+                _eval_assign(lvalue, rvalue_src, ctx, variables, indicators)
                 pc += 1
 
             elif op in ("IF", "WHEN"):
@@ -931,8 +1031,12 @@ class _Runtime:
                         _assign(variables, indicators, field_name, resume.values[field_name])
                 pc += 1
 
+            elif op == "SORTA":
+                _sort_array(variables.get(instr.expr.lower()), instr.expr, instr.down)
+                pc += 1
+
             elif op == "CLEAR":
-                _clear(instr.expr, variables, ds_members)
+                _clear(instr.expr, variables, ds_members, ctx)
                 pc += 1
 
             elif op in FILE_OPS:

@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from ._helpers import col
+from .errors import RpgleError
 
 _INZ_RE = re.compile(r"INZ\(([^)]*)\)", re.IGNORECASE)
 
@@ -62,6 +63,7 @@ class DSpec:
     dec: Optional[int] = None
     init: Optional[str] = None
     kind: str = ""  # "" (plain), or a free-form type with its own rules, e.g. "ind"
+    dim: Optional[int] = None  # number of elements, for an array (free-form only)
 
 
 @dataclass
@@ -79,6 +81,7 @@ class DsSpec:
     likeds: Optional[str] = None
     likerec: Optional[str] = None
     extname: Optional[str] = None
+    dim: Optional[int] = None  # an array of data structures (must be qualified)
 
 
 @dataclass
@@ -194,6 +197,8 @@ def parse_rpgle(source: str) -> Program:
             length_s = col(line, 33, 39)
             dec_s = col(line, 41, 42)
             keywords = line[43:].strip() if len(line) >= 44 else ""
+            if re.search(r"\bDIM\s*\(", keywords, re.IGNORECASE):
+                raise RpgleError(f"{name}: arrays in fixed-form D-specs are not supported (use free-form dcl-s ... dim())")
             init = None
             m = _INZ_RE.search(keywords)
             if m:

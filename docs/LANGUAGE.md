@@ -95,7 +95,8 @@ A statement is everything up to a semicolon: it can span lines, and several can 
 | Control flow | `if`/`elseif`/`else`/`endif`, `dow`, `dou`, `enddo`, `for ... to\|downto ... by`/`endfor`, `select`/`when`/`other`/`endsl`, `leave`, `iter`, `return` |
 | Subroutines | `begsr`, `endsr`, `exsr` |
 | Calls | `callp name(args);` or just `name(args);`, and `name(args)` inside any expression |
-| Other | `clear` a variable or a whole data structure |
+| Arrays | `dim(n)` on `dcl-s` and `dcl-ds`, `%elem`, `%lookup`, `sorta`, `clear`, whole-array assignment (see "Arrays") |
+| Other | `clear` a variable, an array, or a whole data structure |
 | Assignment | `x = expr;`  `x += expr;` (also `-=` `*=` `/=`)  `eval x = expr;`  `*in03 = *on;` |
 | Files | `chain` `setll` `setgt` `read` `reade` `readp` `readpe` `write` `update` `delete` `exfmt`; keys can be an expression or a list: `chain (cust : ord) orders;` |
 | Operators | the expression language below, now including `NOT` (looser than comparison, tighter than `AND`) |
@@ -110,7 +111,7 @@ A statement is everything up to a semicolon: it can span lines, and several can 
 
 **Opcode extenders** `(n)`, `(p)`, `(h)` are accepted and ignored. `(e)` raises an error, since it needs `%ERROR`.
 
-Not supported yet, and each raises an error naming the line rather than being skipped: arrays (`dim`), external procedures and programs (`CALL`, `extproc`, `extpgm`), date/time types, `monitor`, `reset`, `/copy`, `dcl-f` keywords other than the device, `keyed` and `usage`. Mixed source (`/free ... /end-free` blocks inside fixed-form) is not supported either: the whole file is one or the other.
+Not supported yet, and each raises an error naming the line rather than being skipped: arrays inside data structures, external procedures and programs (`CALL`, `extproc`, `extpgm`), date/time types, `monitor`, `reset`, `/copy`, `dcl-f` keywords other than the device, `keyed` and `usage`. Mixed source (`/free ... /end-free` blocks inside fixed-form) is not supported either: the whole file is one or the other.
 
 ### Data structures
 
@@ -161,6 +162,42 @@ Statements outside any `dcl-proc` are the main line and run first, in the order 
 **Screens.** A procedure called with `callp` or as a bare statement can `exfmt`, and the screen reaches whoever is driving `run_program`, same as the main line's. A procedure called from inside an *expression* cannot, because an expression can't pause for the user, and you get an error saying to use `callp`.
 
 Not supported: procedures taking data structures as parameters, `*omit`, `export`/`import` linkage (`export` is parsed and ignored), `static` locals, main-program parameters (`dcl-pi` outside a procedure), `%PARMS`, `%ADDR`.
+
+### Arrays
+
+```
+dcl-s price packed(7:2) dim(50);               // 50 elements, numbered from 1
+dcl-ds line qualified dim(10);                 // an array of data structures
+  sku char(6);
+  qty packed(5);
+end-ds;
+
+for i = 1 to %elem(price);
+  price(i) = i * 1.5;
+endfor;
+line(3).qty += 10;
+n = %lookup('A100' : skus);                    // 0 if not found
+sorta(d) price;                                // descending
+```
+
+Elements are numbered from 1 and the subscript can be any expression, including another array element. A subscript outside 1 to `dim` is an error, never a wraparound. `dim` takes a whole number or a numeric `dcl-c`. `inz` applies to every element.
+
+Each element is its own variable, so it keeps the array's length and decimals: `%char(m(1))` for a `packed(9:2)` array shows `1.50`. For an array of data structures each element is a set of subfields, read and written as `line(i).qty`; the data structure must be `qualified`, and can borrow its layout with `likerec` or `likeds`, as in "Data structures".
+
+| Operation | Notes |
+|---|---|
+| `%elem(arr)` | the number of elements |
+| `%lookup(value : arr [: start [: count]])` | 1-based index of the first element equal to `value`, comparing text without trailing blanks, or 0. Works on number, text and indicator arrays. The `%LOOKUPLT`/`LE`/`GE`/`GT` forms are not supported |
+| `sorta arr;` `sorta(d) arr;` | sort ascending or descending, in place. Text sorts by its characters, not EBCDIC order |
+| `clear arr;` `clear arr(i);` | blank, zero or off. `clear line(2)` clears one element's subfields |
+| `arr = other;` | copies element by element; both must have the same `dim` |
+| `arr = 0;` `arr = *blanks;` `arr = *zeros;` | sets every element |
+
+Procedures take arrays as parameters declared with `dim(n)`, which must match the argument's `dim` exactly. By reference and `const` share the caller's array; `value` copies it. A single value where an array is expected, or an array where a single value is, is an error naming the parameter.
+
+An array name on its own (`x = arr;`) is an error that tells you to subscript it, rather than quietly doing something odd. `*BLANKS` and `*ZEROS` also work in ordinary assignments now, e.g. `name = *blanks`.
+
+Not supported: arrays inside data structures (a `dim` on a subfield), arrays of data structures as `chain`/`write` targets, `%subarr`, `%xfoot`, `sorta` on a data structure array, `*in(n)` indicator arrays, compile-time and pre-runtime arrays (`**CTDATA`), and fixed-form `DIM` (which is now an error rather than being silently ignored, as it was before).
 
 ## DISK Files
 

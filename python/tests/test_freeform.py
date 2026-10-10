@@ -119,7 +119,7 @@ class ParseTest(unittest.TestCase):
             ("**free\ndcl-s a packed(3);\na = 1\n", "semicolon"),
             ("**free\nchain(e) k custmast;\n", "%ERROR"),
             ("**free\ndcl-s a date;\n", "not supported"),
-            ("**free\ndcl-s a char(3) dim(5);\n", "arrays"),
+            ("**free\ndcl-s a char(3) dim(0);\n", "at least one"),
             ("**free\n/copy foo\n", "/copy"),
             ("**free\nt = 'oops;\n", "unterminated"),
             ("**free\nfor i = 1;\n", "for needs"),

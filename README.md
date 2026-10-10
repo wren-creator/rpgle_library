@@ -112,11 +112,12 @@ evalExpr("%TRIM('  hi  ')", { vars: {}, indicators: {} });   // 'hi'
 | Feature | Supported | Notes |
 |---|---|---|
 | Fixed-form RPG IV | Yes | |
-| Free-form RPG IV (`**FREE`): `dcl-s`/`dcl-c`/`dcl-f`, `if`/`elseif`, `dow`/`dou`/`for`, `select`, `iter`/`leave`, `+=`, `NOT`, `ind`, `dcl-ds`, `clear`, `dcl-proc`/`dcl-pi`, `callp` | Python only | See [`docs/LANGUAGE.md`](./docs/LANGUAGE.md) |
+| Free-form RPG IV (`**FREE`): `dcl-s`/`dcl-c`/`dcl-f`, `if`/`elseif`, `dow`/`dou`/`for`, `select`, `iter`/`leave`, `+=`, `NOT`, `ind`, `dcl-ds`, `clear`, `dcl-proc`/`dcl-pi`, `callp`, arrays | Python only | See [`docs/LANGUAGE.md`](./docs/LANGUAGE.md) |
 | `EVAL`, `IF`/`ELSE`/`ENDIF`, `DOW`/`ENDDO`/`LEAVE`, `SELECT`/`WHEN`/`OTHER`/`ENDSL` | Yes | |
 | `EXSR`/`BEGSR`/`ENDSR`, `EXFMT`, `DIV`/`MVR`, `RETURN` | Yes | |
 | Standalone D-spec fields (`S`), `INZ` | Yes | |
-| Data structures, `LIKE`, arrays, prototypes | No | |
+| Data structures, `LIKE`, prototypes | Free-form, Python only | |
+| Arrays (`dim`), `%elem`, `%lookup`, `sorta`, arrays of data structures | Free-form, Python only | Fixed-form `DIM` raises an error |
 | DISK file I/O: `CHAIN`, `SETLL`, `SETGT`, `READ`, `READE`, `READP`, `READPE`, `WRITE`, `UPDATE`, `DELETE`, `KLIST`/`KFLD`, `%EOF`/`%FOUND`/`%EQUAL` | Python only | Backed by SQLite. See [`docs/LANGUAGE.md`](./docs/LANGUAGE.md) |
 | `CALL` | No | |
 | `%TRIM`, `%LEN`, `%SUBST` | Yes | |
@@ -188,7 +189,11 @@ Goal: run and test RPG IV logic on Linux, macOS or Windows, with no IBM i licens
   - [x] 3b. Built-in functions (`%char`, `%dec`, `%scan`, `%replace`, `%upper`, `%rem`, ...), string `+`, real `varchar`
   - [x] 3c. `dcl-ds` (`qualified`, `likerec`, `likeds`, `extname`), file ops into and out of a data structure, `clear`
   - [x] 3d. `dcl-proc`, `dcl-pi` (reference, `const`, `value`, `*nopass`), return values, recursion, `callp` and calls inside expressions
-- [ ] **4. Calls and structures.** Data structures, arrays, `CALL`/`CALLP`, `/COPY`, `PRINTER` files
+- [ ] **4. Calls and structures.** (Data structures and `CALLP` shipped with 3c and 3d.)
+  - [x] 4a. Arrays: `dim`, `%elem`, `%lookup`, `sorta`, arrays of data structures, array parameters
+  - [ ] 4b. `/COPY` includes
+  - [ ] 4c. `CALL` between programs
+  - [ ] 4d. `PRINTER` files
 
 This will not be a drop-in replacement for the IBM compiler. System APIs, CL, data areas, job and spool behavior, and ILE binding are out of scope. The pitch is run, test and port RPG logic anywhere, not replace IBM i.
 

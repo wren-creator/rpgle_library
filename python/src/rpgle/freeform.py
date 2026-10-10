@@ -23,10 +23,11 @@ Supported:
   assignment     x = expr;  x += expr;  eval x = expr;  *in03 = *on;
   files          chain setll setgt read reade readp readpe write
                  update delete exfmt, optionally into/from a data structure
-  other          clear
+  arrays         dim(n) on dcl-s and dcl-ds, sorta, clear
 
 Not supported yet (each raises an error naming the statement, never
-skips it silently): arrays (dim), pos/overlay, external procedures,
+skips it silently): arrays inside data structures, pos/overlay,
+external procedures,
 date/time types, monitor, /copy, the (e) opcode extender.
 ─────────────────────────────────────────────────────────────────
 """
@@ -173,7 +174,7 @@ def _find_assignment(text: str) -> Optional[tuple[str, str, str]]:
 
 
 def _is_lvalue(text: str) -> bool:
-    return bool(re.match(r"^[A-Za-z_*][\w.*]*(\s*\(.*\))?$", text))
+    return bool(re.match(r"^[A-Za-z_*][\w.*]*(\s*\(.*\))?(\.[A-Za-z_]\w*)?$", text))
 
 
 def _parse_type(type_name: str, params: list[str]) -> tuple[int, Optional[int], str]:
@@ -205,6 +206,26 @@ def _parse_type(type_name: str, params: list[str]) -> tuple[int, Optional[int], 
     raise RpgleError(f"type {type_name} is not supported")
 
 
+def _parse_dim(visible: list[DSpec], tail: str) -> Optional[int]:
+    """The element count from dim(n), where n is a whole number or the
+    name of an earlier numeric dcl-c.
+    """
+    dm = re.search(r"\bdim\s*\(\s*([^)]*?)\s*\)", tail, re.IGNORECASE)
+    if not dm:
+        return None
+    arg = dm.group(1)
+    if arg.lstrip("-").isdigit():
+        n = int(arg)
+    else:
+        const = next((d for d in visible if d.name.lower() == arg.lower() and d.dec == 0 and d.init), None)
+        if const is None:
+            raise RpgleError(f"dim({arg}): use a whole number or a numeric dcl-c declared earlier")
+        n = int(float(const.init))
+    if n < 1:
+        raise RpgleError(f"dim({arg}): an array needs at least one element")
+    return n
+
+
 def _make_dspec(visible: list[DSpec], rest: str, what: str) -> DSpec:
     """Builds the DSpec for `name type(params) keywords`, the shape shared
     by dcl-s and data structure subfields.
@@ -214,8 +235,7 @@ def _make_dspec(visible: list[DSpec], rest: str, what: str) -> DSpec:
         raise RpgleError(f"can't read declaration: {what} {rest}")
     name, type_name, _, params_s, tail = m.groups()
     tail_l = tail.lower()
-    if re.search(r"\bdim\s*\(", tail_l):
-        raise RpgleError("arrays (DIM) are not supported yet")
+    dim = _parse_dim(visible, tail)
     if re.search(r"\b(pos|overlay|samepos)\s*\(", tail_l):
         raise RpgleError("POS/OVERLAY are not supported: subfields don't share storage")
 
@@ -246,14 +266,14 @@ def _make_dspec(visible: list[DSpec], rest: str, what: str) -> DSpec:
             init = arg
     if kind == "ind" and init is None:
         init = "0"
-    return DSpec(name=name, deftype="S", length=length, dec=dec, init=init, kind=kind)
+    return DSpec(name=name, deftype="S", length=length, dec=dec, init=init, kind=kind, dim=dim)
 
 
 def _parse_dcl_s(scope, visible: list[DSpec], rest: str) -> None:
     scope.dspecs.append(_make_dspec(visible, rest, "dcl-s"))
 
 
-def _parse_dcl_ds(scope, rest: str) -> Optional[DsSpec]:
+def _parse_dcl_ds(scope, visible: list[DSpec], rest: str) -> Optional[DsSpec]:
     """Starts a data structure. Returns it if it still needs subfields
     (and an end-ds), or None if its layout is borrowed (likeds, likerec,
     extname) and it's already complete.
@@ -276,10 +296,14 @@ def _parse_dcl_ds(scope, rest: str) -> Optional[DsSpec]:
             ds.likerec = split_top(arg, ":")[0]
         elif head == "extname":
             ds.extname = split_top(arg, ":")[0].strip("'")
+        elif head == "dim":
+            ds.dim = _parse_dim(visible, tok)
         else:
             raise RpgleError(f"dcl-ds {ds.name}: {tok} is not supported yet")
     if (ds.likeds or ds.likerec or ds.extname) and not ds.qualified and ds.likeds:
         ds.qualified = True  # a likeds copy is always accessed qualified
+    if ds.dim and not ds.qualified:
+        raise RpgleError(f"data structure {ds.name}: an array of data structures must be qualified")
     if any(d.name.lower() == ds.name.lower() for d in scope.dss):
         raise RpgleError(f"data structure {ds.name} is declared twice")
     scope.dss.append(ds)
@@ -385,6 +409,8 @@ def _statement(state: _State, text: str, line: int) -> None:
             raise RpgleError(f"{word} found inside data structure {state.open_ds.name}; is its end-ds missing?")
         else:
             sub = _make_dspec(state.visible_dspecs(), text, "subfield")
+            if sub.dim:
+                raise RpgleError(f"{sub.name}: arrays inside data structures are not supported yet")
             state.open_ds.subfields.append(sub)
         return
     if word == "end-ds":
@@ -395,6 +421,13 @@ def _statement(state: _State, text: str, line: int) -> None:
 
     # Opcode extenders, e.g. chain(n) or read(e): attached with no space.
     # Only letters from E/N/P/H count, so chain(custno) is still a key.
+    if word == "sorta":
+        sm = re.match(r"^\(\s*([adAD])\s*\)", rest)
+        down = bool(sm) and sm.group(1).lower() == "d"
+        name = rest[sm.end() :].strip() if sm else rest.strip()
+        if not re.match(r"^[A-Za-z_]\w*$", name):
+            raise RpgleError("sorta needs an array name: sorta arr;  or  sorta(d) arr;")
+        return add("SORTA", expr=name, down=down)
     if word in _KEYED_OPS | _FILE_ONLY_OPS | {"delete", "callp"} and rest.startswith("("):
         em = re.match(r"^\(([a-zA-Z ]*)\)", rest)
         letters = set(em.group(1).lower().replace(" ", "")) if em else set()
@@ -424,7 +457,7 @@ def _statement(state: _State, text: str, line: int) -> None:
     if word == "dcl-s":
         return _parse_dcl_s(scope, state.visible_dspecs(), rest)
     if word == "dcl-ds":
-        state.open_ds = _parse_dcl_ds(scope, rest.strip())
+        state.open_ds = _parse_dcl_ds(scope, state.visible_dspecs(), rest.strip())
         return
     if word == "clear":
         if not rest:

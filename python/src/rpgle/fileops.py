@@ -73,7 +73,7 @@ class FileRuntime:
         self._by_format: dict[str, str] = {}
         self._last: Optional[FileHandle] = None
         # data structure name -> prefix of its variables ("cust." if qualified)
-        self._ds_prefix = {d.name.lower(): (d.name.lower() + "." if d.qualified else "") for d in prog.dss}
+        self._ds_prefix = {d.name.lower(): (d.name.lower() + "." if d.qualified else "") for d in prog.dss if not d.dim}
 
         disk = [f for f in prog.files if (f.device or "").upper() == "DISK"]
         if disk and db is None:
