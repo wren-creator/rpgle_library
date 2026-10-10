@@ -180,7 +180,7 @@ Python has native generators, just like JS, so this port didn't need Go's gorout
 Goal: run and test RPG IV logic on Linux, macOS or Windows, with no IBM i license. The Python port leads; JS and Go follow once a feature settles.
 
 - [x] **1. A real runner.** `rpgle run prog.rpgle` draws each screen on a terminal (Python)
-- [x] **2. `DISK` file I/O on SQLite.** Multi-file F-specs, `CHAIN`, `READ`, `READE`, `SETLL`, `WRITE`, `UPDATE`, `DELETE`, `%EOF`, `%FOUND`, `%EQUAL` (Python; JS and Go to follow). Try it: `rpgle load programs/custmast.pf programs/custmast.csv --db shop.db`, then `rpgle run programs/custinq.rpgle --db shop.db`
+- [x] **2. `DISK` file I/O on SQLite.** Multi-file F-specs, `CHAIN`, `READ`, `READE`, `SETLL`, `WRITE`, `UPDATE`, `DELETE`, `%EOF`, `%FOUND`, `%EQUAL` (Python; JS and Go to follow). Try it (after `pip install -e python` in an active venv, see [`python/README.md`](./python/README.md)): `rpgle load programs/custmast.pf programs/custmast.csv --db shop.db`, then `rpgle run programs/custinq.rpgle --db shop.db`
 - [ ] **3. Free-form RPG.** `**FREE`, `DCL-S`, `DCL-DS`, `DCL-PR`/`DCL-PI`, `DCL-PROC`, `DCL-F`, built-in functions
 - [ ] **4. Calls and structures.** Data structures, arrays, `CALL`/`CALLP`, `/COPY`, `PRINTER` files
 

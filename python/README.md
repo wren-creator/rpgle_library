@@ -35,7 +35,14 @@ Run it yourself: `python examples/quick_math.py` (minimal, no display file at al
 
 ## Running a program: the `rpgle` command
 
-Installing the package gives you an `rpgle` command (or use `python -m rpgle`):
+Installing the package gives you an `rpgle` command. From a checkout, install it into a virtualenv and activate that venv, or the command won't be on your PATH:
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e python
+```
+
+Without installing, `PYTHONPATH=python/src python3 -m rpgle ...` runs the same thing.
 
 ```bash
 rpgle run programs/sales-report.rpgle                  # picks up sales-report.dspf next to it
