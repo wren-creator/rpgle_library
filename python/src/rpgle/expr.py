@@ -202,8 +202,8 @@ def _tokenize(src: str) -> list[_Token]:
         if c.isalpha() or c == "_":
             j = i
             s = []
-            while j < n and (src[j].isalnum() or src[j] == "_"):
-                s.append(src[j])
+            while j < n and (src[j].isalnum() or src[j] == "_" or (src[j] == "." and src[j + 1 : j + 2].isalpha())):
+                s.append(src[j])  # a dot inside a name is qualification: cust.name
                 j += 1
             name = "".join(s)
             upper = name.upper()

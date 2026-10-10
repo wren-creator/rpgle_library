@@ -13,16 +13,18 @@ can span lines and several can share one. `//` comments and /* */
 blocks are stripped. Keywords are case-insensitive.
 
 Supported:
-  declarations   ctl-opt (ignored), dcl-s, dcl-c, dcl-f
+  declarations   ctl-opt (ignored), dcl-s, dcl-c, dcl-f, dcl-ds ... end-ds
+                 (qualified, likeds, likerec, extname)
   control flow   if/elseif/else/endif, dow, dou, enddo, for/endfor,
                  select/when/other/endsl, leave, iter, return
   subroutines    begsr, endsr, exsr
   assignment     x = expr;  x += expr;  eval x = expr;  *in03 = *on;
   files          chain setll setgt read reade readp readpe write
-                 update delete exfmt
+                 update delete exfmt, optionally into/from a data structure
+  other          clear
 
 Not supported yet (each raises an error naming the statement, never
-skips it silently): dcl-ds, dcl-proc/dcl-pi/dcl-pr, arrays (dim),
+skips it silently): dcl-proc/dcl-pi/dcl-pr, arrays (dim), pos/overlay,
 date/time types, monitor, /copy, the (e) opcode extender.
 ─────────────────────────────────────────────────────────────────
 """
@@ -34,7 +36,7 @@ from typing import Optional
 
 from .errors import RpgleError
 from .expr import split_top
-from .rpgle import DSpec, FileSpec, Program, Statement
+from .rpgle import DSpec, DsSpec, FileSpec, Program, Statement
 
 _WORD = re.compile(r"[A-Za-z][A-Za-z0-9_-]*")
 _FOR = re.compile(
@@ -46,7 +48,6 @@ _KEYED_OPS = {"chain", "setll", "setgt", "reade", "readpe"}  # key then file
 _FILE_ONLY_OPS = {"read", "readp", "write", "update"}  # file or record format
 _SIMPLE = {"else", "endif", "enddo", "endfor", "select", "other", "endsl", "endsr", "leave", "iter"}
 _UNSUPPORTED = {
-    "dcl-ds": "data structures arrive in the next step of Milestone 3",
     "dcl-proc": "procedures arrive in a later step of Milestone 3",
     "dcl-pi": "procedures arrive in a later step of Milestone 3",
     "dcl-pr": "procedures arrive in a later step of Milestone 3",
@@ -54,7 +55,6 @@ _UNSUPPORTED = {
     "callp": "procedure calls arrive in a later step of Milestone 3",
     "call": "CALL is not supported",
     "dsply": "DSPLY is not supported",
-    "clear": "CLEAR is not supported yet",
     "reset": "RESET is not supported",
     "eval-corr": "EVAL-CORR is not supported",
 }
@@ -207,14 +207,19 @@ def _parse_type(type_name: str, params: list[str]) -> tuple[int, Optional[int], 
     raise RpgleError(f"type {type_name} is not supported")
 
 
-def _parse_dcl_s(prog: Program, rest: str) -> None:
+def _make_dspec(prog: Program, rest: str, what: str) -> DSpec:
+    """Builds the DSpec for `name type(params) keywords`, the shape shared
+    by dcl-s and data structure subfields.
+    """
     m = re.match(r"^(\w+)\s+(\w+)\s*(\(([^)]*)\))?\s*(.*)$", rest, re.DOTALL)
     if not m:
-        raise RpgleError(f"can't read declaration: dcl-s {rest}")
+        raise RpgleError(f"can't read declaration: {what} {rest}")
     name, type_name, _, params_s, tail = m.groups()
     tail_l = tail.lower()
     if re.search(r"\bdim\s*\(", tail_l):
         raise RpgleError("arrays (DIM) are not supported yet")
+    if re.search(r"\b(pos|overlay|samepos)\s*\(", tail_l):
+        raise RpgleError("POS/OVERLAY are not supported: subfields don't share storage")
 
     if type_name.lower() == "like":
         src = (params_s or "").strip()
@@ -243,7 +248,44 @@ def _parse_dcl_s(prog: Program, rest: str) -> None:
             init = arg
     if kind == "ind" and init is None:
         init = "0"
-    prog.dspecs.append(DSpec(name=name, deftype="S", length=length, dec=dec, init=init, kind=kind))
+    return DSpec(name=name, deftype="S", length=length, dec=dec, init=init, kind=kind)
+
+
+def _parse_dcl_s(prog: Program, rest: str) -> None:
+    prog.dspecs.append(_make_dspec(prog, rest, "dcl-s"))
+
+
+def _parse_dcl_ds(prog: Program, rest: str) -> Optional[DsSpec]:
+    """Starts a data structure. Returns it if it still needs subfields
+    (and an end-ds), or None if its layout is borrowed (likeds, likerec,
+    extname) and it's already complete.
+    """
+    tokens = [t for t in split_top(rest, " ") if t]
+    if not tokens:
+        raise RpgleError("dcl-ds needs a name")
+    ds = DsSpec(name=tokens[0])
+    for tok in tokens[1:]:
+        low = tok.lower()
+        arg = tok[tok.index("(") + 1 : tok.rindex(")")].strip() if "(" in tok and tok.endswith(")") else ""
+        head = low.split("(")[0]
+        if head == "qualified":
+            ds.qualified = True
+        elif head in ("inz", "template"):
+            pass
+        elif head == "likeds":
+            ds.likeds = arg
+        elif head == "likerec":
+            ds.likerec = split_top(arg, ":")[0]
+        elif head == "extname":
+            ds.extname = split_top(arg, ":")[0].strip("'")
+        else:
+            raise RpgleError(f"dcl-ds {ds.name}: {tok} is not supported yet")
+    if (ds.likeds or ds.likerec or ds.extname) and not ds.qualified and ds.likeds:
+        ds.qualified = True  # a likeds copy is always accessed qualified
+    if any(d.name.lower() == ds.name.lower() for d in prog.dss):
+        raise RpgleError(f"data structure {ds.name} is declared twice")
+    prog.dss.append(ds)
+    return None if (ds.likeds or ds.likerec or ds.extname) else ds
 
 
 def _parse_dcl_c(prog: Program, rest: str) -> None:
@@ -302,10 +344,31 @@ def _parse_dcl_f(prog: Program, rest: str) -> None:
         prog.file = fs
 
 
-def _statement(prog: Program, text: str, line: int) -> None:
+class _State:
+    """What the statement parser carries from one statement to the next."""
+
+    def __init__(self) -> None:
+        self.prog = Program()
+        self.open_ds: Optional[DsSpec] = None  # between dcl-ds and end-ds
+
+
+def _statement(state: _State, text: str, line: int) -> None:
+    prog = state.prog
     m = _WORD.match(text)
     word = m.group(0).lower() if m else ""
     rest = text[m.end() :] if m else text
+
+    if state.open_ds is not None:
+        if word == "end-ds":
+            state.open_ds = None
+        elif word.startswith("dcl-"):
+            raise RpgleError(f"{word} found inside data structure {state.open_ds.name}; is its end-ds missing?")
+        else:
+            sub = _make_dspec(prog, text, "subfield")
+            state.open_ds.subfields.append(sub)
+        return
+    if word == "end-ds":
+        return  # closes a DS whose layout was borrowed; nothing to do
 
     def add(op: str, **kw) -> None:
         prog.statements.append(Statement(op=op, line=line, **kw))
@@ -327,6 +390,13 @@ def _statement(prog: Program, text: str, line: int) -> None:
         return
     if word == "dcl-s":
         return _parse_dcl_s(prog, rest)
+    if word == "dcl-ds":
+        state.open_ds = _parse_dcl_ds(prog, rest.strip())
+        return
+    if word == "clear":
+        if not rest:
+            raise RpgleError("clear needs a variable or data structure")
+        return add("CLEAR", expr=rest)
     if word == "dcl-c":
         return _parse_dcl_c(prog, rest)
     if word == "dcl-f":
@@ -361,7 +431,11 @@ def _statement(prog: Program, text: str, line: int) -> None:
     if word == "exfmt":
         return add("EXFMT", expr=rest)
 
+    declared = {f.name.lower() for f in prog.files}
     if word in _KEYED_OPS:
+        km = re.match(r"^(.*\S)\s+(\w+)\s+(\w+)$", rest, re.DOTALL)
+        if km and km.group(2).lower() in declared:  # key file datastructure
+            return add(word.upper(), factor1=km.group(1).strip(), factor2=km.group(2), ds=km.group(3))
         km = re.match(r"^(.*\S)\s+([A-Za-z_]\w*)$", rest, re.DOTALL)
         if not km:
             raise RpgleError(f"{word} needs a key and a file name")
@@ -372,9 +446,10 @@ def _statement(prog: Program, text: str, line: int) -> None:
             raise RpgleError("delete needs a file name")
         return add("DELETE", factor1=km.group(1), factor2=km.group(2))
     if word in _FILE_ONLY_OPS:
-        if not re.match(r"^[A-Za-z_]\w*$", rest):
-            raise RpgleError(f"{word} takes just a file or record format name, got {rest!r}")
-        return add(word.upper(), factor2=rest)
+        fm = re.match(r"^([A-Za-z_]\w*)(?:\s+([A-Za-z_]\w*))?$", rest)
+        if not fm:
+            raise RpgleError(f"{word} takes a file or record format name, then optionally a data structure; got {rest!r}")
+        return add(word.upper(), factor2=fm.group(1), ds=fm.group(2))
 
     body = rest if word == "eval" else text
     found = _find_assignment(body)
@@ -387,12 +462,14 @@ def _statement(prog: Program, text: str, line: int) -> None:
 
 def parse_free(source: str) -> Program:
     """Parses free-form RPG IV source (starting with **FREE)."""
-    prog = Program()
+    state = _State()
     for text, line in _split(source):
         try:
-            _statement(prog, text, line)
+            _statement(state, text, line)
         except RpgleError as e:
             if str(e).startswith("line "):
                 raise
             raise RpgleError(f"line {line}: {e}") from None
-    return prog
+    if state.open_ds is not None:
+        raise RpgleError(f"data structure {state.open_ds.name} is missing its end-ds")
+    return state.prog

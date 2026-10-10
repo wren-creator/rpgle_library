@@ -44,7 +44,7 @@ from .fileops import FILE_OPS, FileRuntime
 from .database import Database
 from .pf import PhysicalFile
 from .expr import Context, Var, as_bool, as_float, as_string, eval_expr, split_assignment
-from .rpgle import Program
+from .rpgle import DSpec, DsSpec, Program
 from ._helpers import pad_end_trunc, pad_start_zero
 
 __all__ = [
@@ -61,6 +61,60 @@ __all__ = [
     "render_format",
     "run_program",
 ]
+
+
+def _dspec_from_pf_field(f) -> DSpec:
+    return DSpec(name=f.name, deftype="S", length=f.length, dec=f.dec if f.dtype == "N" else None)
+
+
+def _ds_layout(prog: Program, ds: DsSpec, dds: DDS, pfs: Optional[dict[str, PhysicalFile]], seen=()) -> list[DSpec]:
+    """The subfields a data structure ends up with, wherever they come from."""
+    if ds.likeds:
+        other = next((d for d in prog.dss if d.name.lower() == ds.likeds.lower()), None)
+        if other is None or other.name.lower() in seen or other.name.lower() == ds.name.lower():
+            raise RpgleError(f"{ds.name}: LIKEDS({ds.likeds}) must name a data structure declared earlier")
+        return _ds_layout(prog, other, dds, pfs, seen + (ds.name.lower(),))
+    if ds.likerec:
+        want = ds.likerec.upper()
+        for pf in (pfs or {}).values():
+            if pf.format.upper() == want:
+                return [_dspec_from_pf_field(f) for f in pf.fields]
+        for fmt in dds.formats.values():
+            if fmt.name.upper() == want:
+                return [
+                    DSpec(name=f.name, deftype="S", length=f.length, dec=f.dec if f.dtype != "A" else None)
+                    for f in fmt.fields
+                    if f.kind == "field"
+                ]
+        raise RpgleError(f"{ds.name}: LIKEREC({ds.likerec}) is not a record format of any file in this program")
+    if ds.extname:
+        pf = (pfs or {}).get(ds.extname.upper())
+        if pf is None:
+            raise RpgleError(f"{ds.name}: EXTNAME({ds.extname}) is not a file in this program")
+        return [_dspec_from_pf_field(f) for f in pf.fields]
+    return ds.subfields
+
+
+def expand_ds(
+    prog: Program, dds: DDS, pfs: Optional[dict[str, PhysicalFile]] = None
+) -> dict[str, list[tuple[str, DSpec]]]:
+    """Every data structure's variables: {ds name (lower): [(variable
+    name (lower), the subfield's DSpec), ...]}. A qualified DS's
+    variables are named `ds.sub`; an unqualified one's are just `sub`.
+    """
+    out: dict[str, list[tuple[str, DSpec]]] = {}
+    for ds in prog.dss:
+        prefix = ds.name.lower() + "." if ds.qualified else ""
+        out[ds.name.lower()] = [(prefix + sub.name.lower(), sub) for sub in _ds_layout(prog, ds, dds, pfs)]
+    return out
+
+
+def _new_var(d: DSpec) -> Var:
+    if d.dec is None:
+        init = d.init.strip("'") if d.init is not None else ""
+        value = init[: d.length] if d.kind == "varchar" else pad_end_trunc(init, d.length)
+        return Var(type="A", length=d.length, dec=0, value=value, kind=d.kind)
+    return Var(type="N", length=d.length, dec=d.dec, value=float(d.init) if d.init is not None else 0.0)
 
 
 def build_vars(prog: Program, dds: DDS, pfs: Optional[dict[str, PhysicalFile]] = None) -> dict[str, Var]:
@@ -102,18 +156,11 @@ def build_vars(prog: Program, dds: DDS, pfs: Optional[dict[str, PhysicalFile]] =
     for d in prog.dspecs:
         if d.deftype != "S":
             continue
-        key = d.name.lower()
-        if d.dec is None:
-            init = d.init.strip("'") if d.init is not None else ""
-            variables[key] = Var(
-                type="A",
-                length=d.length,
-                dec=0,
-                value=init[: d.length] if d.kind == "varchar" else pad_end_trunc(init, d.length),
-                kind=d.kind,
-            )
-        else:
-            variables[key] = Var(type="N", length=d.length, dec=d.dec, value=float(d.init) if d.init is not None else 0.0)
+        variables[d.name.lower()] = _new_var(d)
+
+    for members in expand_ds(prog, dds, pfs).values():
+        for key, sub in members:
+            variables.setdefault(key, _new_var(sub))
 
     return variables
 
@@ -145,6 +192,7 @@ class Instr:
     limit: Optional[str] = None  # FORINIT: the TO/DOWNTO limit
     step: Optional[str] = None  # FORINIT: the BY increment
     down: bool = False  # FORINIT/FORTEST: DOWNTO
+    ds: Optional[str] = None  # file ops: data structure to read into / write from
 
 
 @dataclass
@@ -349,8 +397,12 @@ def compile_program(statements) -> Compiled:
                     ind_hi=stmt.ind_hi,
                     ind_lo=stmt.ind_lo,
                     ind_eq=stmt.ind_eq,
+                    ds=stmt.ds,
                 )
             )
+
+        elif op == "CLEAR":
+            instrs.append(Instr(op="CLEAR", expr=stmt.expr))
 
         elif op == "KLIST":
             current_klist = (stmt.factor1 or "").upper()
@@ -429,6 +481,24 @@ def _assign(variables: dict[str, Var], indicators: dict[str, bool], lvalue: str,
         # what DIV/MVR-based modulo relies on for boundedness.
         factor = 10**v.dec
         v.value = math.trunc(as_float(rvalue) * factor) / factor
+
+
+def _clear(target: str, variables: dict[str, Var], ds_members: dict[str, list[tuple[str, DSpec]]]) -> None:
+    """CLEAR: character fields to blanks, numbers to zero, indicators to
+    off. Naming a data structure clears every subfield.
+    """
+    name = target.strip().lower()
+    keys = [k for k, _ in ds_members[name]] if name in ds_members else [name]
+    for key in keys:
+        v = variables.get(key)
+        if v is None:
+            raise RpgleError(f"CLEAR: unknown variable {target}")
+        if v.kind == "ind":
+            v.value = "0"
+        elif v.type == "A":
+            v.value = "" if v.kind == "varchar" else " " * v.length
+        else:
+            v.value = 0.0
 
 
 def _format_field_text(v: Var) -> str:
@@ -576,6 +646,7 @@ def _run_program(
     instrs = compiled.instrs
     subroutines = compiled.subroutines
     files = FileRuntime(prog, db, pfs, compiled.klists)
+    ds_members = expand_ds(prog, dds, pfs)
     ctx = Context(vars=variables, indicators=indicators, file_status=files.status)
     call_stack: list[int] = []
     for_state: dict[int, tuple[float, float]] = {}  # FORTEST index -> (limit, by)
@@ -696,6 +767,10 @@ def _run_program(
             for field_name in rendered.input_map.values():
                 if resume and resume.values and field_name in resume.values:
                     _assign(variables, indicators, field_name, resume.values[field_name])
+            pc += 1
+
+        elif op == "CLEAR":
+            _clear(instr.expr, variables, ds_members)
             pc += 1
 
         elif op in FILE_OPS:

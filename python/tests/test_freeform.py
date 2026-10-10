@@ -112,7 +112,9 @@ class ParseTest(unittest.TestCase):
 
     def test_errors_name_the_line(self):
         for src, fragment in [
-            ("**free\ndcl-s a packed(3);\ndcl-ds x;\n", "line 3"),
+            ("**free\ndcl-s a packed(3);\ndcl-proc foo;\n", "line 3"),
+            ("**free\ndcl-ds x;\n  a char(3);\n", "end-ds"),
+            ("**free\ndcl-ds x;\n  a char(3) pos(1);\nend-ds;\n", "POS"),
             ("**free\n\nfoo bar;\n", "line 3"),
             ("**free\ndcl-s a packed(3);\na = 1\n", "semicolon"),
             ("**free\nchain(e) k custmast;\n", "%ERROR"),
@@ -138,7 +140,9 @@ class FixedFormGuardTest(unittest.TestCase):
         self.assertIn("free-form", str(cm.exception))
 
 
-class RunTest(unittest.TestCase):
+class FreeBase(unittest.TestCase):
+    """Seeded database plus helpers; no tests of its own."""
+
     def setUp(self):
         self.db = Database()
         self.addCleanup(self.db.close)
@@ -170,6 +174,8 @@ class RunTest(unittest.TestCase):
             rows.append(r["MSG"])
         return rows
 
+
+class RunTest(FreeBase):
     def test_for_loop_to_and_by(self):
         self.run_free("""
 dcl-s i packed(3); dcl-s t packed(5);

@@ -90,10 +90,11 @@ A statement is everything up to a semicolon: it can span lines, and several can 
 
 | Area | Supported |
 |---|---|
-| Declarations | `ctl-opt` (ignored), `dcl-s`, `dcl-c`, `dcl-f` |
+| Declarations | `ctl-opt` (ignored), `dcl-s`, `dcl-c`, `dcl-f`, `dcl-ds` (see "Data structures") |
 | Types | `char`, `varchar` (no padding, `%LEN` is its content length, truncated at its declared size), `ind`, `int`, `uns`, `packed`, `zoned`, `bindec`, `float`, `like(x)` of an earlier `dcl-s`; `inz` with a value, `*blank`, `*zero`, `*on`, `*off` |
 | Control flow | `if`/`elseif`/`else`/`endif`, `dow`, `dou`, `enddo`, `for ... to\|downto ... by`/`endfor`, `select`/`when`/`other`/`endsl`, `leave`, `iter`, `return` |
 | Subroutines | `begsr`, `endsr`, `exsr` |
+| Other | `clear` a variable or a whole data structure |
 | Assignment | `x = expr;`  `x += expr;` (also `-=` `*=` `/=`)  `eval x = expr;`  `*in03 = *on;` |
 | Files | `chain` `setll` `setgt` `read` `reade` `readp` `readpe` `write` `update` `delete` `exfmt`; keys can be an expression or a list: `chain (cust : ord) orders;` |
 | Operators | the expression language below, now including `NOT` (looser than comparison, tighter than `AND`) |
@@ -108,7 +109,25 @@ A statement is everything up to a semicolon: it can span lines, and several can 
 
 **Opcode extenders** `(n)`, `(p)`, `(h)` are accepted and ignored. `(e)` raises an error, since it needs `%ERROR`.
 
-Not supported yet, and each raises an error naming the line rather than being skipped: `dcl-ds`, `dcl-proc`/`dcl-pi`/`dcl-pr`, `callp`, arrays (`dim`), date/time types, `monitor`, `clear`/`reset`, `/copy`, `dcl-f` keywords other than the device, `keyed` and `usage`. Mixed source (`/free ... /end-free` blocks inside fixed-form) is not supported either: the whole file is one or the other.
+Not supported yet, and each raises an error naming the line rather than being skipped: `dcl-proc`/`dcl-pi`/`dcl-pr`, `callp`, arrays (`dim`), date/time types, `monitor`, `reset`, `/copy`, `dcl-f` keywords other than the device, `keyed` and `usage`. Mixed source (`/free ... /end-free` blocks inside fixed-form) is not supported either: the whole file is one or the other.
+
+### Data structures
+
+```
+dcl-ds cust qualified likerec(custrec);     // layout borrowed from a file's record format
+chain custno custmast cust;                 // reads INTO cust, leaving the program's own fields alone
+if %found(custmast);
+  total += cust.bal;
+endif;
+cust.name = 'ERIN';
+write custrec cust;                         // writes FROM cust
+```
+
+A data structure's layout comes from one of: its own subfield lines (`dcl-ds ... end-ds`), `likerec(format)` (a record format of any DISK file, or of the display file), `likeds(other)` (a copy of an earlier data structure, always qualified), or `extname('FILE')` (a whole file). The borrowed forms need no subfields, and the `end-ds` after them is optional.
+
+Each subfield is its own program variable. `qualified` structures name them `cust.name`; unqualified ones are just `name`, which is how a plain `dcl-ds` with subfields has always worked. `chain`, `read`, `reade`, `write` and `update` take a data structure as a trailing operand, and the subfield names must match the record's field names. `clear cust` blanks every character subfield and zeroes every number.
+
+The limit worth knowing: a data structure is a *group of variables*, not a block of memory. There is no `pos()`, `overlay()` or `samepos()` (they raise an error), no `%size(ds)`, no assigning one data structure to another (`a = b`), no `eval-corr`, and no data structure as a subfield of another. A data structure's name on its own isn't a variable, so `chain k file cust` works but `msg = cust` doesn't. Arrays of data structures (`dim`) arrive with arrays.
 
 ## DISK Files
 

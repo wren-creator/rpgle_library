@@ -65,6 +65,23 @@ class DSpec:
 
 
 @dataclass
+class DsSpec:
+    """A free-form data structure. Each subfield becomes its own program
+    variable, named `ds.sub` when the DS is qualified and plain `sub`
+    when it isn't. The layout is either the explicit subfields, or
+    borrowed: likeds (another DS), likerec (a file or display record
+    format), extname (a whole file).
+    """
+
+    name: str
+    qualified: bool = False
+    subfields: list[DSpec] = field(default_factory=list)
+    likeds: Optional[str] = None
+    likerec: Optional[str] = None
+    extname: Optional[str] = None
+
+
+@dataclass
 class Statement:
     """One C-spec line, tokenized but not yet control-flow resolved
     (that happens in interpreter.compile_program).
@@ -87,6 +104,7 @@ class Statement:
     limit: Optional[str] = None
     step: Optional[str] = None
     down: bool = False
+    ds: Optional[str] = None  # file ops: read into / write from this data structure
     line: int = 0  # source line, for error messages (free-form only)
 
 
@@ -97,6 +115,7 @@ class Program:
     file: FileSpec = field(default_factory=FileSpec)  # the WORKSTN file
     files: list[FileSpec] = field(default_factory=list)  # every F-spec, source order
     dspecs: list[DSpec] = field(default_factory=list)
+    dss: list[DsSpec] = field(default_factory=list)  # free-form data structures
     statements: list[Statement] = field(default_factory=list)
 
 

@@ -72,6 +72,8 @@ class FileRuntime:
         self._files: dict[str, FileHandle] = {}
         self._by_format: dict[str, str] = {}
         self._last: Optional[FileHandle] = None
+        # data structure name -> prefix of its variables ("cust." if qualified)
+        self._ds_prefix = {d.name.lower(): (d.name.lower() + "." if d.qualified else "") for d in prog.dss}
 
         disk = [f for f in prog.files if (f.device or "").upper() == "DISK"]
         if disk and db is None:
@@ -137,12 +139,17 @@ class FileRuntime:
         h = self._resolve(instr.factor2)
         self._last = h
         op = instr.op
+        prefix = ""
+        if instr.ds:
+            if instr.ds.lower() not in self._ds_prefix:
+                raise RpgleError(f"{instr.ds} is not a data structure")
+            prefix = self._ds_prefix[instr.ds.lower()]
         hi = lo = eq = False  # what each indicator column will be set to
         try:
             if op == "CHAIN":
                 rec = h.chain(self._need_key(instr, evaluate))
                 if rec:
-                    self._load(h, rec, assign)
+                    self._load(rec, assign, prefix)
                 hi = not h.found
             elif op in ("SETLL", "SETGT"):
                 key = self._key(instr.factor1, evaluate)
@@ -159,16 +166,16 @@ class FileRuntime:
             elif op in ("READ", "READP"):
                 rec = h.read() if op == "READ" else h.readp()
                 if rec:
-                    self._load(h, rec, assign)
+                    self._load(rec, assign, prefix)
                 eq = h.eof
             elif op in ("READE", "READPE"):
                 key = self._need_key(instr, evaluate)
                 rec = h.reade(key) if op == "READE" else h.readpe(key)
                 if rec:
-                    self._load(h, rec, assign)
+                    self._load(rec, assign, prefix)
                 eq = h.eof
             elif op in ("WRITE", "UPDATE"):
-                record = {f.name: self._value(variables, f.name) for f in h.pf.fields}
+                record = {f.name: self._value(variables, prefix + f.name) for f in h.pf.fields}
                 h.write(record) if op == "WRITE" else h.update(record)
             elif op == "DELETE":
                 if instr.factor1:
@@ -192,9 +199,9 @@ class FileRuntime:
         return key
 
     @staticmethod
-    def _load(h: FileHandle, rec: dict, assign: Callable[[str, Any], None]) -> None:
+    def _load(rec: dict, assign: Callable[[str, Any], None], prefix: str) -> None:
         for name, value in rec.items():
-            assign(name, value)
+            assign(prefix + name, value)
 
     def status(self, kind: str, name: Optional[str]) -> bool:
         """%EOF / %FOUND / %EQUAL. kind is 'eof', 'found' or 'equal'."""

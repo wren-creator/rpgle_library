@@ -112,7 +112,7 @@ evalExpr("%TRIM('  hi  ')", { vars: {}, indicators: {} });   // 'hi'
 | Feature | Supported | Notes |
 |---|---|---|
 | Fixed-form RPG IV | Yes | |
-| Free-form RPG IV (`**FREE`): `dcl-s`/`dcl-c`/`dcl-f`, `if`/`elseif`, `dow`/`dou`/`for`, `select`, `iter`/`leave`, `+=`, `NOT`, `ind` | Python only | Procedures and data structures still to come. See [`docs/LANGUAGE.md`](./docs/LANGUAGE.md) |
+| Free-form RPG IV (`**FREE`): `dcl-s`/`dcl-c`/`dcl-f`, `if`/`elseif`, `dow`/`dou`/`for`, `select`, `iter`/`leave`, `+=`, `NOT`, `ind`, `dcl-ds`, `clear` | Python only | Procedures still to come. See [`docs/LANGUAGE.md`](./docs/LANGUAGE.md) |
 | `EVAL`, `IF`/`ELSE`/`ENDIF`, `DOW`/`ENDDO`/`LEAVE`, `SELECT`/`WHEN`/`OTHER`/`ENDSL` | Yes | |
 | `EXSR`/`BEGSR`/`ENDSR`, `EXFMT`, `DIV`/`MVR`, `RETURN` | Yes | |
 | Standalone D-spec fields (`S`), `INZ` | Yes | |
@@ -186,7 +186,7 @@ Goal: run and test RPG IV logic on Linux, macOS or Windows, with no IBM i licens
 - [ ] **3. Free-form RPG.**
   - [x] 3a. `**FREE` parser, `dcl-s`/`dcl-c`/`dcl-f`, `elseif`, `dou`, `for`, `iter`, `NOT`, `+=`, `ind`
   - [x] 3b. Built-in functions (`%char`, `%dec`, `%scan`, `%replace`, `%upper`, `%rem`, ...), string `+`, real `varchar`
-  - [ ] 3c. `dcl-ds`
+  - [x] 3c. `dcl-ds` (`qualified`, `likerec`, `likeds`, `extname`), file ops into and out of a data structure, `clear`
   - [ ] 3d. `dcl-proc`, `dcl-pi`, `dcl-pr`, `callp`
 - [ ] **4. Calls and structures.** Data structures, arrays, `CALL`/`CALLP`, `/COPY`, `PRINTER` files
 
