@@ -54,3 +54,15 @@ def dds_line(kind="", name="", length="", dtype="", dec="", keywords="") -> str:
     _put(b, 36, str(dec).rjust(2) if dec != "" else "")
     _put(b, 45, keywords)
     return "".join(b).rstrip()
+
+
+def dspec(name, length, dec=None, init=None) -> str:
+    b = [" "] * 5 + ["D"]
+    _put(b, 7, name)
+    _put(b, 24, "S")
+    _put(b, 33, str(length).rjust(7))
+    if dec is not None:
+        _put(b, 41, str(dec).rjust(2))
+    if init is not None:
+        _put(b, 45, f"INZ({init})")
+    return "".join(b).rstrip()

@@ -16,6 +16,7 @@ Grammar (case-insensitive keywords):
   primary    := NUMBER | STRING | '*ON' | '*OFF'
               | '*IN' DIGIT DIGIT | '*INLR'
               | '%' NAME '(' expr (':' expr)* ')'
+              | '%EOF' | '%FOUND' | '%EQUAL' ('(' FILENAME ')')?
               | NAME | '(' expr ')'
 
 Values are plain Python float/str/bool -- Python is dynamically typed
@@ -42,7 +43,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from .errors import RpgleError
 
@@ -136,6 +137,9 @@ class Context:
 
     vars: dict[str, Var] = field(default_factory=dict)
     indicators: dict[str, bool] = field(default_factory=dict)
+    # Answers %EOF/%FOUND/%EQUAL: (kind, file name or None for "the
+    # last file used") -> bool. None when the program has no DISK files.
+    file_status: Optional[Callable[[str, Optional[str]], bool]] = None
 
 
 @dataclass
@@ -342,7 +346,26 @@ class _Parser:
             return bool(self.ctx.indicators.get(m.group(1), False))
         raise RpgleError(f"Unsupported RPG figurative constant: {name}")
 
+    def _parse_file_status(self, name: str) -> bool:
+        """%EOF, %FOUND, %EQUAL: the argument is a file name, not an
+        expression, and may be left off to mean the last file used.
+        """
+        fname = None
+        t = self._peek()
+        if t and t.type == "op" and t.value == "(":
+            self._next()
+            nt = self._next()
+            if nt is None or nt.type != "name":
+                raise RpgleError(f"{name} takes a file name")
+            fname = nt.value
+            self._expect_op(")")
+        if self.ctx.file_status is None:
+            raise RpgleError(f"{name} used but the program has no DISK files")
+        return self.ctx.file_status(name[1:].lower(), fname)
+
     def _parse_func_call(self, name: str) -> Any:
+        if name in ("%EOF", "%FOUND", "%EQUAL"):
+            return self._parse_file_status(name)
         self._expect_op("(")
         args = [self.parse_expr()]
         while (t := self._peek()) and t.type == "op" and t.value == ":":

@@ -116,8 +116,9 @@ evalExpr("%TRIM('  hi  ')", { vars: {}, indicators: {} });   // 'hi'
 | `EXSR`/`BEGSR`/`ENDSR`, `EXFMT`, `DIV`/`MVR`, `RETURN` | Yes | |
 | Standalone D-spec fields (`S`), `INZ` | Yes | |
 | Data structures, `LIKE`, arrays, prototypes | No | |
-| File I/O (`READ`/`WRITE`/`CHAIN`/`UPDATE`/`DELETE`), `CALL` | No | |
-| `%TRIM`, `%LEN`, `%SUBST` | Yes | Other BIFs (`%CHAR`, `%DEC`, `%EDITC`, ...) are not |
+| DISK file I/O: `CHAIN`, `SETLL`, `SETGT`, `READ`, `READE`, `READP`, `READPE`, `WRITE`, `UPDATE`, `DELETE`, `KLIST`/`KFLD`, `%EOF`/`%FOUND`/`%EQUAL` | Python only | Backed by SQLite. See [`docs/LANGUAGE.md`](./docs/LANGUAGE.md) |
+| `CALL` | No | |
+| `%TRIM`, `%LEN`, `%SUBST`, `%EOF`, `%FOUND`, `%EQUAL` | Yes | File-status BIFs are Python only.  Other BIFs (`%CHAR`, `%DEC`, `%EDITC`, ...) are not |
 
 Full detail: [`docs/LANGUAGE.md`](./docs/LANGUAGE.md).
 
@@ -179,7 +180,7 @@ Python has native generators, just like JS, so this port didn't need Go's gorout
 Goal: run and test RPG IV logic on Linux, macOS or Windows, with no IBM i license. The Python port leads; JS and Go follow once a feature settles.
 
 - [x] **1. A real runner.** `rpgle run prog.rpgle` draws each screen on a terminal (Python)
-- [ ] **2. `DISK` file I/O on SQLite.** Multi-file F-specs, `CHAIN`, `READ`, `READE`, `SETLL`, `WRITE`, `UPDATE`, `DELETE`, `%EOF`, `%FOUND`, `%EQUAL`
+- [x] **2. `DISK` file I/O on SQLite.** Multi-file F-specs, `CHAIN`, `READ`, `READE`, `SETLL`, `WRITE`, `UPDATE`, `DELETE`, `%EOF`, `%FOUND`, `%EQUAL` (Python; JS and Go to follow). Try it: `rpgle load programs/custmast.pf programs/custmast.csv --db shop.db`, then `rpgle run programs/custinq.rpgle --db shop.db`
 - [ ] **3. Free-form RPG.** `**FREE`, `DCL-S`, `DCL-DS`, `DCL-PR`/`DCL-PI`, `DCL-PROC`, `DCL-F`, built-in functions
 - [ ] **4. Calls and structures.** Data structures, arrays, `CALL`/`CALLP`, `/COPY`, `PRINTER` files
 

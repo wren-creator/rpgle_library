@@ -18,7 +18,9 @@ goroutine + channel pair specifically because Go has no generators.
 Supported opcode subset (see docs/LANGUAGE.md for the full RPGLE
 subset this library implements, and what's explicitly out of scope):
 EVAL, IF/ELSE/ENDIF, DOW/ENDDO, LEAVE, SELECT/WHEN/OTHER/ENDSL,
-EXSR/BEGSR/ENDSR, EXFMT, DIV/MVR, RETURN. Expression evaluation
+EXSR/BEGSR/ENDSR, EXFMT, DIV/MVR, RETURN, and the DISK file opcodes
+(CHAIN, SETLL, SETGT, READ, READE, READP, READPE, WRITE, UPDATE,
+DELETE, plus KLIST/KFLD) which live in fileops.py. Expression evaluation
 (arithmetic, comparisons, %TRIM/%LEN/%SUBST) lives in expr.py.
 
 DIV/MVR (not EVAL-expression division) is the classic RPG idiom for
@@ -38,6 +40,9 @@ from typing import Any, Generator, Optional
 
 from .dds import DDS, Format
 from .errors import RpgleError
+from .fileops import FILE_OPS, FileRuntime
+from .database import Database
+from .pf import PhysicalFile
 from .expr import Context, Var, as_bool, as_float, as_string, eval_expr, split_assignment
 from .rpgle import Program
 from ._helpers import pad_end_trunc, pad_start_zero
@@ -58,12 +63,13 @@ __all__ = [
 ]
 
 
-def build_vars(prog: Program, dds: DDS) -> dict[str, Var]:
+def build_vars(prog: Program, dds: DDS, pfs: Optional[dict[str, PhysicalFile]] = None) -> dict[str, Var]:
     """Builds the program's variable table: every named DDS field
     across every record format of the externally-described WORKSTN
     file becomes a program variable (first definition in source order
-    wins on a name collision), plus D-spec standalone fields
-    (definition type 'S' only).
+    wins on a name collision), then every field of each DISK file's
+    record format (pfs, keyed by upper-case file name), plus D-spec
+    standalone fields (definition type 'S' only).
     """
     variables: dict[str, Var] = {}
 
@@ -79,6 +85,19 @@ def build_vars(prog: Program, dds: DDS) -> dict[str, Var]:
                 variables[key] = Var(type="A", length=f.length, dec=0, value=" " * f.length)
             else:
                 variables[key] = Var(type="N", length=f.length, dec=f.dec or 0, value=0.0)
+
+    for fs in prog.files:
+        pf = (pfs or {}).get((fs.name or "").upper())
+        if pf is None or (fs.device or "").upper() != "DISK":
+            continue
+        for pff in pf.fields:
+            key = pff.name.lower()
+            if key in variables:
+                continue
+            if pff.dtype == "A":
+                variables[key] = Var(type="A", length=pff.length, dec=0, value=" " * pff.length)
+            else:
+                variables[key] = Var(type="N", length=pff.length, dec=pff.dec, value=0.0)
 
     for d in prog.dspecs:
         if d.deftype != "S":
@@ -111,6 +130,12 @@ class Instr:
     factor1: Optional[str] = None  # DIV: factor1
     factor2: Optional[str] = None  # DIV: factor2
     result: Optional[str] = None  # DIV/MVR: result field name
+    ind_hi: Optional[str] = None  # file ops: resulting indicators, cols 71-76
+    ind_lo: Optional[str] = None
+    ind_eq: Optional[str] = None
+    # Conditioning indicator, cols 9-11: (negated, "71"). The
+    # instruction runs only when it holds.
+    cond: Optional[tuple[bool, str]] = None
 
 
 @dataclass
@@ -119,6 +144,7 @@ class Compiled:
 
     instrs: list[Instr]
     subroutines: dict[str, int]
+    klists: dict[str, list[str]] = field(default_factory=dict)  # KLIST name -> KFLD field names
 
 
 def compile_program(statements) -> Compiled:
@@ -137,9 +163,15 @@ def compile_program(statements) -> Compiled:
     if_stack: list[dict] = []
     dow_stack: list[dict] = []
     sel_stack: list[dict] = []
+    klists: dict[str, list[str]] = {}
+    current_klist: Optional[str] = None
 
     for stmt in statements:
         op = stmt.op
+        start = len(instrs)
+        cond = _parse_cond(stmt.indic)
+        if cond is not None and op in _NO_COND_OPS:
+            raise RpgleError(f"Conditioning indicators on {op} are not supported")
 
         if op == "EVAL":
             instrs.append(Instr(op="EVAL", expr=stmt.expr))
@@ -247,10 +279,52 @@ def compile_program(statements) -> Compiled:
         elif op == "RETURN":
             instrs.append(Instr(op="RETURN"))
 
+        elif op in FILE_OPS:
+            instrs.append(
+                Instr(
+                    op=op,
+                    factor1=stmt.factor1,
+                    factor2=stmt.factor2,
+                    ind_hi=stmt.ind_hi,
+                    ind_lo=stmt.ind_lo,
+                    ind_eq=stmt.ind_eq,
+                )
+            )
+
+        elif op == "KLIST":
+            current_klist = (stmt.factor1 or "").upper()
+            klists[current_klist] = []
+
+        elif op == "KFLD":
+            if current_klist is None:
+                raise RpgleError("KFLD with no KLIST before it")
+            klists[current_klist].append(stmt.result)
+
         else:
             raise RpgleError(f"Unsupported RPG opcode: {op}")
 
-    return Compiled(instrs=instrs, subroutines=subroutines)
+        for ins in instrs[start:]:
+            ins.cond = cond
+
+    return Compiled(instrs=instrs, subroutines=subroutines, klists=klists)
+
+
+# Ops that expand into jumps, so skipping one on a condition would
+# desynchronize the jump targets. Real RPG allows conditioning these;
+# here it's rejected loudly rather than run wrong.
+_NO_COND_OPS = frozenset(
+    {"IF", "ELSE", "ENDIF", "DOW", "ENDDO", "SELECT", "WHEN", "OTHER", "ENDSL", "BEGSR", "ENDSR", "KLIST", "KFLD"}
+)
+_COND_RE = re.compile(r"^(N?)(\d\d|LR)$", re.IGNORECASE)
+
+
+def _parse_cond(raw: Optional[str]) -> Optional[tuple[bool, str]]:
+    if not raw:
+        return None
+    m = _COND_RE.match(raw)
+    if not m:
+        raise RpgleError(f"Unsupported conditioning indicator: {raw!r}")
+    return (m.group(1).upper() == "N", m.group(2).upper())
 
 
 _NUM_LIT_RE = re.compile(r"^-?\d+(\.\d+)?$")
@@ -293,9 +367,19 @@ def _assign(variables: dict[str, Var], indicators: dict[str, bool], lvalue: str,
 
 
 def _format_field_text(v: Var) -> str:
+    """Display text for a field. Numeric fields are zero-filled to
+    their length. With decimals, the decimal point is written out
+    (so the field is one column wider than a real 5250 would draw it,
+    which shows bare digits with an implied point): bare digits would
+    not survive being typed back in, since "000004875" parses as 4875,
+    not 48.75.
+    """
     if v.type == "A":
         return v.value
     n = v.value
+    if v.dec > 0:
+        body = f"{abs(n):0{v.length + 1}.{v.dec}f}"
+        return "-" + body[1:] if n < 0 else body
     if n < 0:
         width = max(1, v.length - 1)
         return "-" + pad_start_zero(str(round(-n)), width)
@@ -395,18 +479,39 @@ class Resume:
     values: dict[str, str] = field(default_factory=dict)
 
 
-def run_program(prog: Program, dds: DDS) -> Generator[ScreenData, Optional[Resume], None]:
+def run_program(
+    prog: Program,
+    dds: DDS,
+    db: Optional[Database] = None,
+    pfs: Optional[dict[str, PhysicalFile]] = None,
+) -> Generator[ScreenData, Optional[Resume], None]:
     """Runs the program. Yields a ScreenData on every EXFMT; resume
     with .send(Resume(key, values)) where key is whatever function key
     the caller recognizes (matched against the format's own
     CFnn/CAnn-declared keys) and values is {field_name: typed_text} for
     every input field on the format just shown.
+
+    A program with DISK files needs db (a Database) and pfs, a dict of
+    upper-case file name -> PhysicalFile (see pf.parse_pf). Changes are
+    committed when the program ends or the generator is closed.
     """
-    variables = build_vars(prog, dds)
+    try:
+        yield from _run_program(prog, dds, db, pfs)
+    finally:
+        if db is not None:
+            db.commit()
+
+
+def _run_program(
+    prog: Program, dds: DDS, db: Optional[Database], pfs: Optional[dict[str, PhysicalFile]]
+) -> Generator[ScreenData, Optional[Resume], None]:
+    variables = build_vars(prog, dds, pfs)
     indicators: dict[str, bool] = {}
     compiled = compile_program(prog.statements)
     instrs = compiled.instrs
     subroutines = compiled.subroutines
+    files = FileRuntime(prog, db, pfs, compiled.klists)
+    ctx = Context(vars=variables, indicators=indicators, file_status=files.status)
     call_stack: list[int] = []
     pc = 0
     last_div_remainder = 0.0
@@ -414,6 +519,12 @@ def run_program(prog: Program, dds: DDS) -> Generator[ScreenData, Optional[Resum
     while pc < len(instrs):
         instr = instrs[pc]
         op = instr.op
+
+        if instr.cond is not None:
+            negated, num = instr.cond
+            if indicators.get(num, False) == negated:  # condition not met
+                pc += 1
+                continue
 
         if op == "NOP":
             pc += 1
@@ -425,12 +536,12 @@ def run_program(prog: Program, dds: DDS) -> Generator[ScreenData, Optional[Resum
 
         elif op == "EVAL":
             lvalue, rvalue_src = split_assignment(instr.expr)
-            rvalue = eval_expr(rvalue_src, Context(vars=variables, indicators=indicators))
+            rvalue = eval_expr(rvalue_src, ctx)
             _assign(variables, indicators, lvalue, rvalue)
             pc += 1
 
         elif op in ("IF", "WHEN"):
-            cond = eval_expr(instr.expr, Context(vars=variables, indicators=indicators))
+            cond = eval_expr(instr.expr, ctx)
             pc = pc + 1 if as_bool(cond) else instr.false_target
 
         elif op == "OTHER":
@@ -440,7 +551,7 @@ def run_program(prog: Program, dds: DDS) -> Generator[ScreenData, Optional[Resum
             pc = instr.target
 
         elif op == "DOW":
-            cond = eval_expr(instr.expr, Context(vars=variables, indicators=indicators))
+            cond = eval_expr(instr.expr, ctx)
             pc = pc + 1 if as_bool(cond) else instr.false_target
 
         elif op == "ENDDO":
@@ -495,6 +606,15 @@ def run_program(prog: Program, dds: DDS) -> Generator[ScreenData, Optional[Resum
             for field_name in rendered.input_map.values():
                 if resume and resume.values and field_name in resume.values:
                     _assign(variables, indicators, field_name, resume.values[field_name])
+            pc += 1
+
+        elif op in FILE_OPS:
+            files.exec(
+                instr,
+                variables,
+                lambda name, value: _assign(variables, indicators, name, value),
+                lambda num, on: indicators.__setitem__(num, on),
+            )
             pc += 1
 
         elif op == "RETURN":

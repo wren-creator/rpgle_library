@@ -42,6 +42,13 @@ rpgle run programs/sales-report.rpgle                  # picks up sales-report.d
 rpgle run programs/adventure.rpgle --dspf my.dspf      # or name the display file
 ```
 
+```bash
+rpgle load programs/custmast.pf programs/custmast.csv --db shop.db     # fill a DISK file from a CSV
+rpgle run programs/custinq.rpgle --db shop.db                          # customer inquiry: CHAIN by number
+```
+
+Programs with `DISK` files need `--db`, and each file's layout comes from `<filename>.pf` (physical-file DDS) next to the program, or in `--pf-dir`. `custinq.rpgle` is the worked example: a screen, a `CHAIN`, and the not-found indicator.
+
 Each `EXFMT` is drawn as a 24x80 grid, then it prompts for each input field (press Enter to keep the value shown). Type a function key like `F3` at any prompt to send that key, if the current format declares it. It reads plain stdin and writes plain stdout, so it works over SSH, in a pipe, and in CI. The program ends when the RPG does, or when input runs out.
 
 ---
@@ -70,9 +77,9 @@ Builds the program's variable table from DDS-bound fields and D-spec standalone 
 
 Compiles a flat statement list into a jump-resolved instruction array. Most callers won't call this directly — `run_program` does it internally. Named `compile_program`, not `compile`, to avoid shadowing Python's `compile` builtin — the one deliberate naming deviation from the JS/Go ports' `compile()`/`Compile()`.
 
-### `run_program(prog: Program, dds: DDS) -> Generator[ScreenData, Resume, None]`
+### `run_program(prog: Program, dds: DDS, db: Database | None = None, pfs: dict[str, PhysicalFile] | None = None) -> Generator[ScreenData, Resume, None]`
 
-Runs the program. Yields a `ScreenData` at every `EXFMT`, resumes with `.send(resume)`.
+Runs the program. Yields a `ScreenData` at every `EXFMT`, resumes with `.send(resume)`. A program with `DISK` files also needs `db` (a `Database`, SQLite) and `pfs` (upper-case file name to `PhysicalFile`, from `parse_pf`). Changes are committed when the program ends. See [`../docs/LANGUAGE.md`](../docs/LANGUAGE.md) "DISK Files".
 
 | `ScreenData` field | Type | Meaning |
 |---|---|---|

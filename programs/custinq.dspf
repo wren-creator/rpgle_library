@@ -1,0 +1,15 @@
+     A* CUSTINQ.DSPF -- customer inquiry screen. Type a customer
+     A* number, press Enter, see the name and balance. F3 exits.
+
+     A                                      DSPSIZ(24 80 *DS3)
+
+     A          R INQ                       CF03(03)
+     A                                  1 30'CUSTOMER INQUIRY'
+     A                                  3  3'Customer number:'
+     A            CUSTNO         5  0B  3 20
+     A                                  5  3'Name:'
+     A            NAME          20A  O  5 20
+     A                                  6  3'Balance:'
+     A            BAL            9  2O  6 20
+     A 90         MSGTXT        30A  O  8  3
+     A                                 22  3'Enter=Look up   F3=Exit'

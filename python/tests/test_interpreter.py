@@ -130,3 +130,15 @@ class TestAdventureAlwaysFightPlaythroughStaysInBoundsAndEnds(unittest.TestCase)
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DecimalDisplayTest(unittest.TestCase):
+    def test_decimal_fields_show_the_decimal_point_and_round_trip(self):
+        from rpgle.interpreter import _format_field_text
+        from rpgle.expr import Var
+
+        self.assertEqual(_format_field_text(Var(type="N", length=9, dec=2, value=48.75)), "0000048.75")
+        self.assertEqual(_format_field_text(Var(type="N", length=9, dec=2, value=-48.75)), "-000048.75")
+        self.assertEqual(float(_format_field_text(Var(type="N", length=9, dec=2, value=48.75))), 48.75)
+        # whole-number fields are unchanged
+        self.assertEqual(_format_field_text(Var(type="N", length=5, dec=0, value=42)), "00042")

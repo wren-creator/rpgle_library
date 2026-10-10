@@ -78,5 +78,73 @@ class CliTest(unittest.TestCase):
                 sys.stdin = old
 
 
+class DiskCliTest(unittest.TestCase):
+    """Runs programs/custinq.rpgle through the real CLI entry point."""
+
+    def setUp(self):
+        import contextlib
+        import os
+        import sys
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.db = os.path.join(self._tmp.name, "t.db")
+        self.progs = _PROGRAMS_DIR
+        self._redirect = contextlib.redirect_stdout
+        self._sys = sys
+
+    def _main(self, argv, stdin=""):
+        old = self._sys.stdin
+        self._sys.stdin = io.StringIO(stdin)
+        out = io.StringIO()
+        try:
+            with self._redirect(out):
+                code = main(argv)
+        finally:
+            self._sys.stdin = old
+        return code, out.getvalue()
+
+    def _load(self):
+        code, out = self._main(["load", str(self.progs / "custmast.pf"), str(self.progs / "custmast.csv"), "--db", self.db])
+        self.assertEqual(code, 0)
+        self.assertIn("Loaded 4 records into CUSTMAST", out)
+
+    def test_load_then_inquire(self):
+        self._load()
+        code, out = self._main(["run", str(self.progs / "custinq.rpgle"), "--db", self.db], "20\nF3\n")
+        self.assertEqual(code, 0)
+        self.assertIn("Bob Brewer", out)
+        self.assertIn("0000048.75", out)
+        self.assertNotIn("Customer not found", out)
+
+    def test_not_found_shows_the_message(self):
+        self._load()
+        code, out = self._main(["run", str(self.progs / "custinq.rpgle"), "--db", self.db], "99\nF3\n")
+        self.assertEqual(code, 0)
+        self.assertIn("Customer not found", out)
+
+    def test_disk_program_without_db_is_an_error(self):
+        code, _ = self._main(["run", str(self.progs / "custinq.rpgle")])
+        self.assertEqual(code, 1)
+
+    def test_load_rejects_a_csv_missing_columns(self):
+        import os
+
+        bad = os.path.join(self._tmp.name, "bad.csv")
+        with open(bad, "w") as fh:
+            fh.write("custno,name\n1,X\n")
+        code, _ = self._main(["load", str(self.progs / "custmast.pf"), bad, "--db", self.db])
+        self.assertEqual(code, 1)
+
+    def test_load_rejects_a_non_numeric_value(self):
+        import os
+
+        bad = os.path.join(self._tmp.name, "bad.csv")
+        with open(bad, "w") as fh:
+            fh.write("custno,name,bal\nabc,X,1\n")
+        code, _ = self._main(["load", str(self.progs / "custmast.pf"), bad, "--db", self.db])
+        self.assertEqual(code, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

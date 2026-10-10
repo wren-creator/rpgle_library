@@ -1,0 +1,9 @@
+     A* CUSTMAST.PF -- physical file for the customer inquiry example.
+     A* One record per customer, keyed by customer number.
+
+     A                                      UNIQUE
+     A          R CUSTREC
+     A            CUSTNO         5S 0
+     A            NAME          20A
+     A            BAL            9S 2
+     A          K CUSTNO

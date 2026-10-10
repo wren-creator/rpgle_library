@@ -19,6 +19,7 @@ Quick start:
 ─────────────────────────────────────────────────────────────────
 """
 
+from .database import Database, FileHandle
 from .dds import DDS, Field, Format, IndicatorCond, parse_dds
 from .errors import RpgleError
 from .expr import Context, Var, as_bool, as_float, as_string, eval_expr, split_assignment
@@ -51,6 +52,9 @@ __all__ = [
     "DSpec",
     "Statement",
     "parse_rpgle",
+    # database.py
+    "Database",
+    "FileHandle",
     # pf.py
     "PhysicalFile",
     "PfField",

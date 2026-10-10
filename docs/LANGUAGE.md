@@ -10,9 +10,9 @@ Fixed-form RPG source is organized into "specs," identified by a letter in colum
 
 Header specs set compile-time/program-level options (date format, debug flags, etc.). Nothing this library does depends on them, so they're skipped entirely rather than parsed.
 
-### F-spec — WORKSTN-only subset
+### F-spec — WORKSTN and DISK files
 
-File specs describe the files a program uses. This library only reads enough of an F-spec to identify a single `WORKSTN` (display) file: its name, type, designation, record format, and device. Multi-file programs, database files (`DISK`), and keyed-file details aren't parsed — a program here has exactly one file, its screen.
+File specs describe the files a program uses. Every F-spec is collected in `Program.files`, and `Program.file` is still the program's `WORKSTN` (display) file. `DISK` files are **Python port only so far**, and must be externally described (column 22 = `E`): their layout comes from a physical-file DDS (see "DISK Files" below and [`DDS_REFERENCE.md`](./DDS_REFERENCE.md)). The key is whatever the DDS says; the `K` in column 34 is read but the DDS decides.
 
 ### D-spec — standalone fields only
 
@@ -77,7 +77,57 @@ Either way, the shape is the same plain data — no terminal protocol is involve
 | `DIV` / `MVR` | Classic fixed-column integer divide, then remainder-of-last-DIV | `seed DIV 9973 quot` then `MVR seed` |
 | `RETURN` | Ends the program immediately | `RETURN` |
 
-Anything else throws `Unsupported RPG opcode` at compile time, or `Unimplemented RPG instruction` at run time if it somehow got past compile. **Not supported at all:** file I/O opcodes (`READ`/`WRITE`/`CHAIN`/`UPDATE`/`DELETE`), `CALL`, arrays, `%EOF`/`%FOUND`, free-form RPG.
+| `CHAIN` `SETLL` `SETGT` `READ` `READE` `READP` `READPE` `WRITE` `UPDATE` `DELETE` | DISK file access (Python port) — see "DISK Files" below | `custno CHAIN CUSTMAST 71` |
+| `KLIST` / `KFLD` | Names a composite key; `KFLD`'s field goes in the result column | `ORDK KLIST` |
+
+Anything else throws `Unsupported RPG opcode` at compile time, or `Unimplemented RPG instruction` at run time if it somehow got past compile. **Not supported at all:** `CALL`, arrays, free-form RPG.
+
+## DISK Files
+
+*Python port only so far.* A program with `DISK` F-specs runs against a `Database` (SQLite) and a dict of physical-file DDS, one per file:
+
+```python
+from rpgle import Database, parse_pf, parse_rpgle, parse_dds, run_program
+
+db = Database("shop.db")                      # or Database() for in-memory
+pfs = {"CUSTMAST": parse_pf("CUSTMAST", open("custmast.pf").read())}
+for screen in run_program(prog, dds, db, pfs): ...
+```
+
+Every field of the file's record format becomes a program variable. `CHAIN`, `READ` and friends copy a record into those variables; `WRITE` and `UPDATE` copy them back out. `WRITE`/`UPDATE` name the record format (`CUSTREC`) and the others name the file (`CUSTMAST`); either works anywhere here. Changes are committed when the program ends.
+
+### Resulting indicators (columns 71-76)
+
+Which column means what depends on the opcode:
+
+| Opcode | hi (71-72) | lo (73-74) | eq (75-76) |
+|---|---|---|---|
+| `CHAIN` | not found | error | |
+| `SETLL` | not found | error | equal |
+| `SETGT` | not found | error | |
+| `READ` `READE` `READP` `READPE` | | error | end of file |
+| `WRITE` `UPDATE` | | error | |
+| `DELETE` | not found | error | |
+
+Each indicator named on the line is set on or off every time, so a stale "on" can't carry over. An error with no error indicator named halts the program, as in real RPG with no `*PSSR`. A duplicate key on `WRITE` to a `UNIQUE` file is an error.
+
+### Positioning
+
+A file always has a position that the next `READ` moves from. `SETLL key` puts it just before the first record with a key `>=` the one given; `SETGT key` just after the last record `<=` it. `*LOVAL` and `*HIVAL` mean the very start and very end. `CHAIN` positions on the record it finds. A key with fewer values than the file has key fields (a partial `KLIST`) compares on the leading fields only, which is how `READE` walks all of one customer's orders.
+
+The position is held as a key, not a database cursor, so deleting or updating records in the middle of a read loop is safe.
+
+### `%EOF`, `%FOUND`, `%EQUAL`
+
+`%EOF(file)`, `%FOUND(file)` and `%EQUAL(file)` read the state of the last operation on that file; with no argument they mean the last file used. `%EOF` is set by the `READ` family; `%FOUND` by `CHAIN`, `SETLL`, `SETGT` and keyed `DELETE`; `%EQUAL` by `SETLL`.
+
+### Conditioning indicators (columns 9-11)
+
+`C   71   EVAL ...` runs only when indicator 71 is on, `N71` when it's off. Supported on every opcode except the block-structure ones (`IF`, `ELSE`, `ENDIF`, `DOW`, `ENDDO`, `SELECT`, `WHEN`, `OTHER`, `ENDSL`, `BEGSR`, `ENDSR`), which raise an error instead of running wrong. `LR` works as an indicator name too.
+
+### Not supported
+
+`DESCEND` keys, join and select/omit logical files, more than one record format per file, record locking, `READC`, `CLOSE`/`OPEN` and `USROPN`, `%ERROR`, `PREFIX`/`RENAME`, program-described files, `*PSSR`. The F-spec type (`I`/`U`/`O`) is read but not enforced. Decimal fields are shown with an explicit decimal point (one column wider than a real 5250 would draw them) so a value survives being typed back in.
 
 ## Indicators
 
@@ -117,7 +167,7 @@ primary    := NUMBER | STRING | '*ON' | '*OFF'
 
 ### Built-in functions
 
-Only three: `%TRIM(str)`, `%LEN(str)`, `%SUBST(str : start [: len])` (1-based start, matching real RPG). Anything else throws `Unsupported RPG built-in`.
+`%TRIM(str)`, `%LEN(str)`, `%SUBST(str : start [: len])` (1-based start, matching real RPG), and the file-status trio `%EOF`, `%FOUND`, `%EQUAL` (Python port, see "DISK Files"). Anything else throws `Unsupported RPG built-in`.
 
 ### Figurative constants
 
@@ -133,7 +183,7 @@ RPG has no `%REM` built-in until well past V4R3. The classic, unambiguous way to
 
 ## What's Explicitly Out of Scope
 
-Free-form RPG, arrays, data structures (`DS`), file I/O opcodes (`READ`/`WRITE`/`CHAIN`/`UPDATE`/`DELETE`), `CALL`/prototypes, `%EOF`/`%FOUND`, subfiles and windows in DDS, DDS keyword continuation lines, OR'd/multi-line indicator conditions. None of this is an oversight — it's the boundary of what the shipped example content needs, documented here instead of silently missing.
+Free-form RPG, arrays, data structures (`DS`), `CALL`/prototypes, DISK file I/O in the JS and Go ports, subfiles and windows in DDS, DDS keyword continuation lines, OR'd/multi-line indicator conditions. None of this is an oversight — it's the boundary of what the shipped example content needs, documented here instead of silently missing.
 
 ## See Also
 
