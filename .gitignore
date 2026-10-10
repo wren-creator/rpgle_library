@@ -8,3 +8,6 @@ python/dist/
 
 # Node
 node_modules/
+
+# Local rpgle databases
+*.db
