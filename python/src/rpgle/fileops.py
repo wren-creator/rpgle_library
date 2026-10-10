@@ -26,11 +26,11 @@ a real program with no *PSSR does too (it halts).
 
 from __future__ import annotations
 
-import re
 from typing import Any, Callable, Optional
 
 from .database import Database, FileHandle
 from .errors import RpgleError
+from .expr import split_top
 from .pf import PhysicalFile
 from .rpgle import Program
 
@@ -38,7 +38,24 @@ FILE_OPS = frozenset(
     {"CHAIN", "SETLL", "SETGT", "READ", "READE", "READP", "READPE", "WRITE", "UPDATE", "DELETE"}
 )
 
-_NUM_RE = re.compile(r"^-?\d+(\.\d+)?$")
+
+def _closes_at_end(text: str) -> bool:
+    """True if the '(' at the start of text is closed by the ')' at its end."""
+    depth = 0
+    in_str = False
+    for i, c in enumerate(text):
+        if c == "'":
+            in_str = not in_str
+        elif not in_str:
+            if c == "(":
+                depth += 1
+            elif c == ")":
+                depth -= 1
+                if depth == 0:
+                    return i == len(text) - 1
+    return False
+
+
 _LOVAL = "LOVAL"
 _HIVAL = "HIVAL"
 
@@ -81,8 +98,11 @@ class FileRuntime:
             raise RpgleError(f"{name} is not a DISK file or record format in this program")
         return h
 
-    def _key(self, factor1: Optional[str], variables: dict) -> Any:
-        """A key tuple, or the sentinel _LOVAL / _HIVAL."""
+    def _key(self, factor1: Optional[str], evaluate: Callable[[str], Any]) -> Any:
+        """A key tuple, or the sentinel _LOVAL / _HIVAL. The key is a
+        KLIST name, *LOVAL/*HIVAL, or an expression, or several in
+        parentheses: custno, 'ABC', (custno : ordno), (a + 1).
+        """
         if not factor1:
             raise RpgleError("This file opcode needs a key in factor 1")
         up = factor1.upper()
@@ -91,12 +111,11 @@ class FileRuntime:
         if up == "*HIVAL":
             return _HIVAL
         if up in self._klists:
-            return tuple(self._value(variables, n) for n in self._klists[up])
-        if factor1.startswith("'"):
-            return (factor1.strip("'"),)
-        if _NUM_RE.match(factor1):
-            return (float(factor1),)
-        return (self._value(variables, factor1),)
+            return tuple(evaluate(n) for n in self._klists[up])
+        text = factor1.strip()
+        if text.startswith("(") and _closes_at_end(text):
+            text = text[1:-1]
+        return tuple(evaluate(part) for part in split_top(text, ":"))
 
     @staticmethod
     def _value(variables: dict, name: str) -> Any:
@@ -113,6 +132,7 @@ class FileRuntime:
         variables: dict,
         assign: Callable[[str, Any], None],
         set_ind: Callable[[str, bool], None],
+        evaluate: Callable[[str], Any],
     ) -> None:
         h = self._resolve(instr.factor2)
         self._last = h
@@ -120,12 +140,12 @@ class FileRuntime:
         hi = lo = eq = False  # what each indicator column will be set to
         try:
             if op == "CHAIN":
-                rec = h.chain(self._need_key(instr, variables))
+                rec = h.chain(self._need_key(instr, evaluate))
                 if rec:
                     self._load(h, rec, assign)
                 hi = not h.found
             elif op in ("SETLL", "SETGT"):
-                key = self._key(instr.factor1, variables)
+                key = self._key(instr.factor1, evaluate)
                 if key == _LOVAL:
                     h.setll(None)
                 elif key == _HIVAL:
@@ -142,7 +162,7 @@ class FileRuntime:
                     self._load(h, rec, assign)
                 eq = h.eof
             elif op in ("READE", "READPE"):
-                key = self._need_key(instr, variables)
+                key = self._need_key(instr, evaluate)
                 rec = h.reade(key) if op == "READE" else h.readpe(key)
                 if rec:
                     self._load(h, rec, assign)
@@ -152,7 +172,7 @@ class FileRuntime:
                 h.write(record) if op == "WRITE" else h.update(record)
             elif op == "DELETE":
                 if instr.factor1:
-                    h.delete(self._need_key(instr, variables))
+                    h.delete(self._need_key(instr, evaluate))
                     hi = not h.found
                 else:
                     h.delete()
@@ -165,8 +185,8 @@ class FileRuntime:
             if ind:
                 set_ind(ind, on)
 
-    def _need_key(self, instr, variables: dict) -> tuple:
-        key = self._key(instr.factor1, variables)
+    def _need_key(self, instr, evaluate: Callable[[str], Any]) -> tuple:
+        key = self._key(instr.factor1, evaluate)
         if key in (_LOVAL, _HIVAL):
             raise RpgleError(f"{instr.op} does not accept *LOVAL or *HIVAL")
         return key

@@ -105,7 +105,7 @@ def build_vars(prog: Program, dds: DDS, pfs: Optional[dict[str, PhysicalFile]] =
         key = d.name.lower()
         if d.dec is None:
             init = d.init.strip("'") if d.init is not None else ""
-            variables[key] = Var(type="A", length=d.length, dec=0, value=pad_end_trunc(init, d.length))
+            variables[key] = Var(type="A", length=d.length, dec=0, value=pad_end_trunc(init, d.length), kind=d.kind)
         else:
             variables[key] = Var(type="N", length=d.length, dec=d.dec, value=float(d.init) if d.init is not None else 0.0)
 
@@ -136,6 +136,9 @@ class Instr:
     # Conditioning indicator, cols 9-11: (negated, "71"). The
     # instruction runs only when it holds.
     cond: Optional[tuple[bool, str]] = None
+    limit: Optional[str] = None  # FORINIT: the TO/DOWNTO limit
+    step: Optional[str] = None  # FORINIT: the BY increment
+    down: bool = False  # FORINIT/FORTEST: DOWNTO
 
 
 @dataclass
@@ -190,38 +193,90 @@ def compile_program(statements) -> Compiled:
             frame["else_jmp_index"] = jmp_idx
             instrs[frame["if_index"]].false_target = jmp_idx + 1
 
+        elif op == "ELSEIF":
+            # ELSE + IF sharing one ENDIF: the nested IF's frame is marked
+            # "chained", so ENDIF closes it and every frame it hangs off.
+            if not if_stack:
+                raise RpgleError("ELSEIF with no open IF")
+            frame = if_stack[-1]
+            jmp_idx = len(instrs)
+            instrs.append(Instr(op="JMP", target=None))
+            frame["else_jmp_index"] = jmp_idx
+            instrs[frame["if_index"]].false_target = jmp_idx + 1
+            idx = len(instrs)
+            instrs.append(Instr(op="IF", expr=stmt.expr, false_target=None))
+            if_stack.append({"if_index": idx, "else_jmp_index": None, "chained": True})
+
         elif op == "ENDIF":
             if not if_stack:
                 raise RpgleError("ENDIF with no open IF")
-            frame = if_stack.pop()
             idx = len(instrs)
-            if frame["else_jmp_index"] is None:
-                instrs[frame["if_index"]].false_target = idx
-            else:
-                instrs[frame["else_jmp_index"]].target = idx
+            while True:
+                frame = if_stack.pop()
+                if frame["else_jmp_index"] is None:
+                    instrs[frame["if_index"]].false_target = idx
+                else:
+                    instrs[frame["else_jmp_index"]].target = idx
+                if not frame.get("chained"):
+                    break
             instrs.append(Instr(op="NOP"))
 
         elif op == "DOW":
             idx = len(instrs)
             instrs.append(Instr(op="DOW", expr=stmt.expr, false_target=None))
-            dow_stack.append({"dow_index": idx, "leaves": []})
+            dow_stack.append({"kind": "DOW", "start": idx, "leaves": [], "iters": []})
 
-        elif op == "LEAVE":
-            if not dow_stack:
-                raise RpgleError("LEAVE with no open DOW")
-            frame = dow_stack[-1]
-            frame["leaves"].append(len(instrs))
-            instrs.append(Instr(op="LEAVE", target=None))
-
-        elif op == "ENDDO":
-            if not dow_stack:
-                raise RpgleError("ENDDO with no open DOW")
-            frame = dow_stack.pop()
+        elif op == "DOU":
             idx = len(instrs)
-            instrs[frame["dow_index"]].false_target = idx + 1
+            instrs.append(Instr(op="NOP"))  # loop top; the test is at ENDDO
+            dow_stack.append({"kind": "DOU", "start": idx, "expr": stmt.expr, "leaves": [], "iters": []})
+
+        elif op == "FOR":
+            if stmt.limit is None:
+                raise RpgleError("FOR is only supported in free-form source (**FREE)")
+            init_idx = len(instrs)
+            instrs.append(
+                Instr(op="FORINIT", factor1=stmt.factor1, expr=stmt.expr, limit=stmt.limit, step=stmt.step, down=stmt.down)
+            )
+            test_idx = len(instrs)
+            instrs.append(Instr(op="FORTEST", factor1=stmt.factor1, false_target=None, down=stmt.down))
+            dow_stack.append(
+                {"kind": "FOR", "start": test_idx, "var": stmt.factor1, "leaves": [], "iters": [], "init": init_idx}
+            )
+
+        elif op in ("LEAVE", "ITER"):
+            if not dow_stack:
+                raise RpgleError(f"{op} with no open loop")
+            frame = dow_stack[-1]
+            if op == "ITER" and frame["kind"] == "DOW":
+                instrs.append(Instr(op="LEAVE", target=frame["start"]))  # jump back to the test
+            else:
+                frame["leaves" if op == "LEAVE" else "iters"].append(len(instrs))
+                instrs.append(Instr(op="LEAVE", target=None))
+
+        elif op in ("ENDDO", "ENDFOR"):
+            if not dow_stack:
+                raise RpgleError(f"{op} with no open loop")
+            frame = dow_stack.pop()
+            kind = frame["kind"]
+            if (op == "ENDFOR") != (kind == "FOR"):
+                raise RpgleError(f"{op} closes a {kind} loop")
+            idx = len(instrs)
+            if kind == "DOW":
+                instrs[frame["start"]].false_target = idx + 1
+                instrs.append(Instr(op="ENDDO", target=frame["start"]))
+                continue_at = frame["start"]
+            elif kind == "DOU":
+                instrs.append(Instr(op="DOUTEST", expr=frame["expr"], target=frame["start"]))
+                continue_at = idx
+            else:
+                instrs[frame["start"]].false_target = idx + 1
+                instrs.append(Instr(op="FORSTEP", factor1=frame["var"], target=frame["start"], down=instrs[frame["init"]].down))
+                continue_at = idx
             for li in frame["leaves"]:
                 instrs[li].target = idx + 1
-            instrs.append(Instr(op="ENDDO", target=frame["dow_index"]))
+            for ii in frame["iters"]:
+                instrs[ii].target = continue_at
 
         elif op == "SELECT":
             sel_stack.append({"arms": [], "pending_jumps": []})
@@ -313,7 +368,7 @@ def compile_program(statements) -> Compiled:
 # desynchronize the jump targets. Real RPG allows conditioning these;
 # here it's rejected loudly rather than run wrong.
 _NO_COND_OPS = frozenset(
-    {"IF", "ELSE", "ENDIF", "DOW", "ENDDO", "SELECT", "WHEN", "OTHER", "ENDSL", "BEGSR", "ENDSR", "KLIST", "KFLD"}
+    {"IF", "ELSE", "ELSEIF", "ENDIF", "DOW", "DOU", "FOR", "ENDDO", "ENDFOR", "SELECT", "WHEN", "OTHER", "ENDSL", "BEGSR", "ENDSR", "KLIST", "KFLD"}
 )
 _COND_RE = re.compile(r"^(N?)(\d\d|LR)$", re.IGNORECASE)
 
@@ -357,7 +412,9 @@ def _assign(variables: dict[str, Var], indicators: dict[str, bool], lvalue: str,
     v = variables.get(key)
     if v is None:
         raise RpgleError(f"Unknown RPG variable on assignment: {lvalue}")
-    if v.type == "A":
+    if v.kind == "ind":
+        v.value = "1" if as_bool(rvalue) else "0"
+    elif v.type == "A":
         v.value = pad_end_trunc(as_string(rvalue), v.length)
     else:
         # Truncate-on-assign (no rounding) -- the real RPG default, and
@@ -513,6 +570,7 @@ def _run_program(
     files = FileRuntime(prog, db, pfs, compiled.klists)
     ctx = Context(vars=variables, indicators=indicators, file_status=files.status)
     call_stack: list[int] = []
+    for_state: dict[int, tuple[float, float]] = {}  # FORTEST index -> (limit, by)
     pc = 0
     last_div_remainder = 0.0
 
@@ -560,6 +618,30 @@ def _run_program(
         elif op == "LEAVE":
             pc = instr.target
 
+        elif op == "DOUTEST":
+            pc = pc + 1 if as_bool(eval_expr(instr.expr, ctx)) else instr.target
+
+        elif op == "FORINIT":
+            _assign(variables, indicators, instr.factor1, eval_expr(instr.expr, ctx))
+            limit = as_float(eval_expr(instr.limit, ctx))
+            by = as_float(eval_expr(instr.step, ctx)) if instr.step else 1.0
+            if by <= 0:
+                raise RpgleError(f"FOR {instr.factor1}: BY must be positive (use DOWNTO to count down)")
+            for_state[pc + 1] = (limit, by)
+            pc += 1
+
+        elif op == "FORTEST":
+            limit, _ = for_state[pc]
+            value = as_float(_read_value(variables, instr.factor1))
+            keep_going = value >= limit if instr.down else value <= limit
+            pc = pc + 1 if keep_going else instr.false_target
+
+        elif op == "FORSTEP":
+            _, by = for_state[instr.target]
+            value = as_float(_read_value(variables, instr.factor1))
+            _assign(variables, indicators, instr.factor1, value - by if instr.down else value + by)
+            pc = instr.target
+
         elif op == "EXSR":
             target = subroutines.get(instr.sub_target)
             if target is None:
@@ -580,13 +662,13 @@ def _run_program(
             pc += 1
 
         elif op == "EXFMT":
-            fmt = dds.formats.get(instr.format)
+            fmt = next((f for n, f in dds.formats.items() if n.upper() == instr.format.upper()), None)
             if fmt is None:
                 raise RpgleError(f"Unknown DDS record format: {instr.format}")
             rendered = render_format(fmt, variables, indicators)
 
             resume = yield ScreenData(
-                format_name=instr.format,
+                format_name=fmt.name,
                 fields=rendered.fields,
                 cursor=rendered.cursor,
                 keys=fmt.keys,
@@ -614,6 +696,7 @@ def _run_program(
                 variables,
                 lambda name, value: _assign(variables, indicators, name, value),
                 lambda num, on: indicators.__setitem__(num, on),
+                lambda src: eval_expr(src, ctx),
             )
             pc += 1
 

@@ -8,7 +8,8 @@ IF/DOW/WHEN boolean conditions.
 Grammar (case-insensitive keywords):
   expr       := or_expr
   or_expr    := and_expr (OR and_expr)*
-  and_expr   := compare (AND compare)*
+  and_expr   := not_expr (AND not_expr)*
+  not_expr   := NOT not_expr | compare
   compare    := additive ((= | <> | <= | >= | < | >) additive)?
   additive   := term ((+ | -) term)*
   term       := unary ((* | /) unary)*
@@ -107,12 +108,14 @@ def as_string(v: Any) -> str:
 def _values_equal(a: Any, b: Any) -> bool:
     if _kind(a) != _kind(b):
         return False
+    if isinstance(a, str):
+        return a.rstrip() == b.rstrip()  # RPG compares character data as if blank-padded
     return a == b
 
 
 def _value_less(a: Any, b: Any) -> bool:
     if isinstance(a, str) and isinstance(b, str):
-        return a < b
+        return a.rstrip() < b.rstrip()
     return as_float(a) < as_float(b)
 
 
@@ -129,6 +132,9 @@ class Var:
     length: int
     dec: int
     value: Any
+    # "ind" for a free-form indicator variable: stored as the character
+    # '1' or '0' (which is what RPG does), but read and assigned as a boolean.
+    kind: str = ""
 
 
 @dataclass
@@ -201,7 +207,7 @@ def _tokenize(src: str) -> list[_Token]:
                 j += 1
             name = "".join(s)
             upper = name.upper()
-            if upper in ("AND", "OR"):
+            if upper in ("AND", "OR", "NOT"):
                 tokens.append(_Token("logic", upper))
             else:
                 tokens.append(_Token("name", name))
@@ -261,13 +267,20 @@ class _Parser:
             v = as_bool(v) or as_bool(rhs)
         return v
 
+    def _parse_not(self) -> Any:
+        t = self._peek()
+        if t and t.type == "logic" and t.value == "NOT":
+            self._next()
+            return not as_bool(self._parse_not())
+        return self._parse_compare()
+
     def _parse_and(self) -> Any:
-        v = self._parse_compare()
+        v = self._parse_not()
         while (t := self._peek()) and t.type == "logic" and t.value == "AND":
             self._next()
             # Same reasoning as _parse_or: always parse the right side,
             # even if the left side is already false.
-            rhs = self._parse_compare()
+            rhs = self._parse_not()
             v = as_bool(v) and as_bool(rhs)
         return v
 
@@ -390,7 +403,7 @@ class _Parser:
         v = self.ctx.vars.get(key)
         if v is None:
             raise RpgleError(f"Unknown RPG variable: {name}")
-        return v.value
+        return v.value == "1" if v.kind == "ind" else v.value
 
 
 def eval_expr(src: str, ctx: Context) -> Any:
@@ -403,6 +416,34 @@ def eval_expr(src: str, ctx: Context) -> Any:
     if parser.pos < len(tokens):
         raise RpgleError(f"Trailing tokens in RPG expression: {src!r}")
     return v
+
+
+def split_top(text: str, sep: str) -> list[str]:
+    """Splits text on sep, ignoring any sep inside quotes or
+    parentheses. split_top("a : f(b:c) : 'x:y'", ":") is three parts.
+    """
+    parts, depth, cur, i, n = [], 0, [], 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == "'":
+            j = i + 1
+            while j < n and text[j] != "'":
+                j += 1
+            cur.append(text[i : j + 1])
+            i = j + 1
+            continue
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+        if c == sep and depth == 0:
+            parts.append("".join(cur).strip())
+            cur = []
+        else:
+            cur.append(c)
+        i += 1
+    parts.append("".join(cur).strip())
+    return parts
 
 
 def split_assignment(src: str) -> tuple[str, str]:

@@ -10,7 +10,7 @@ Fixed-form RPG source is organized into "specs," identified by a letter in colum
 
 Header specs set compile-time/program-level options (date format, debug flags, etc.). Nothing this library does depends on them, so they're skipped entirely rather than parsed.
 
-### F-spec — WORKSTN and DISK files
+### F-spec — WORKSTN and DISK files (fixed-form; free-form uses `dcl-f`)
 
 File specs describe the files a program uses. Every F-spec is collected in `Program.files`, and `Program.file` is still the program's `WORKSTN` (display) file. `DISK` files are **Python port only so far**, and must be externally described (column 22 = `E`): their layout comes from a physical-file DDS (see "DISK Files" below and [`DDS_REFERENCE.md`](./DDS_REFERENCE.md)). The key is whatever the DDS says; the `K` in column 34 is read but the DDS decides.
 
@@ -80,7 +80,35 @@ Either way, the shape is the same plain data — no terminal protocol is involve
 | `CHAIN` `SETLL` `SETGT` `READ` `READE` `READP` `READPE` `WRITE` `UPDATE` `DELETE` | DISK file access (Python port) — see "DISK Files" below | `custno CHAIN CUSTMAST 71` |
 | `KLIST` / `KFLD` | Names a composite key; `KFLD`'s field goes in the result column | `ORDK KLIST` |
 
-Anything else throws `Unsupported RPG opcode` at compile time, or `Unimplemented RPG instruction` at run time if it somehow got past compile. **Not supported at all:** `CALL`, arrays, free-form RPG.
+Anything else throws `Unsupported RPG opcode` at compile time, or `Unimplemented RPG instruction` at run time if it somehow got past compile. **Not supported at all:** `CALL`, arrays.
+
+## Free-Form RPG
+
+*Python port only so far.* Source whose first line is `**FREE` is free-form. `parse_rpgle()` detects that and hands it to `freeform.py`, which produces the same `Program`/`FileSpec`/`DSpec`/`Statement` records the fixed-form parser does. The compiler, interpreter and file runtime are shared, so a free-form `chain key custmast;` is exactly a fixed-form `CHAIN` with no result indicators. `programs/custinq-free.rpgle` is the free-form twin of `custinq.rpgle`.
+
+A statement is everything up to a semicolon: it can span lines, and several can share one. `//` comments and `/* */` blocks are stripped. Keywords are case-insensitive, as are variable and file names. Errors name the source line.
+
+| Area | Supported |
+|---|---|
+| Declarations | `ctl-opt` (ignored), `dcl-s`, `dcl-c`, `dcl-f` |
+| Types | `char`, `varchar` (treated as `char`), `ind`, `int`, `uns`, `packed`, `zoned`, `bindec`, `float`, `like(x)` of an earlier `dcl-s`; `inz` with a value, `*blank`, `*zero`, `*on`, `*off` |
+| Control flow | `if`/`elseif`/`else`/`endif`, `dow`, `dou`, `enddo`, `for ... to\|downto ... by`/`endfor`, `select`/`when`/`other`/`endsl`, `leave`, `iter`, `return` |
+| Subroutines | `begsr`, `endsr`, `exsr` |
+| Assignment | `x = expr;`  `x += expr;` (also `-=` `*=` `/=`)  `eval x = expr;`  `*in03 = *on;` |
+| Files | `chain` `setll` `setgt` `read` `reade` `readp` `readpe` `write` `update` `delete` `exfmt`; keys can be an expression or a list: `chain (cust : ord) orders;` |
+| Operators | the expression language below, now including `NOT` (looser than comparison, tighter than `AND`) |
+
+**`FOR`** evaluates its start, limit and `BY` once, on entry, as RPG does. `BY` must be positive; use `downto` to count down. The index is left one step past the limit when the loop finishes.
+
+**`DOU`** tests at the bottom, so the body always runs at least once. `ITER` jumps to the next test (`DOW`, `DOU`) or the next step (`FOR`); `LEAVE` exits the innermost loop.
+
+**`ind`** variables hold `'1'` or `'0'`, as in real RPG, but read and assign as booleans: `ok = *on; if not ok; ...`.
+
+**Character comparison** ignores trailing blanks (`name = 'BOB'` is true for a 20-character `name` holding `BOB` and 17 blanks), as RPG does. This applies to fixed-form too.
+
+**Opcode extenders** `(n)`, `(p)`, `(h)` are accepted and ignored. `(e)` raises an error, since it needs `%ERROR`.
+
+Not supported yet, and each raises an error naming the line rather than being skipped: `dcl-ds`, `dcl-proc`/`dcl-pi`/`dcl-pr`, `callp`, arrays (`dim`), date/time types, `monitor`, `clear`/`reset`, `/copy`, `dcl-f` keywords other than the device, `keyed` and `usage`. Mixed source (`/free ... /end-free` blocks inside fixed-form) is not supported either: the whole file is one or the other.
 
 ## DISK Files
 
@@ -183,7 +211,7 @@ RPG has no `%REM` built-in until well past V4R3. The classic, unambiguous way to
 
 ## What's Explicitly Out of Scope
 
-Free-form RPG, arrays, data structures (`DS`), `CALL`/prototypes, DISK file I/O in the JS and Go ports, subfiles and windows in DDS, DDS keyword continuation lines, OR'd/multi-line indicator conditions. None of this is an oversight — it's the boundary of what the shipped example content needs, documented here instead of silently missing.
+Arrays, data structures (`DS`), `CALL`/prototypes, free-form RPG and DISK file I/O in the JS and Go ports, subfiles and windows in DDS, DDS keyword continuation lines, OR'd/multi-line indicator conditions. None of this is an oversight — it's the boundary of what the shipped example content needs, documented here instead of silently missing.
 
 ## See Also
 

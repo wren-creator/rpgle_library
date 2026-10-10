@@ -61,6 +61,7 @@ class DSpec:
     # dds.py: a real "0" and "blank" are different things.
     dec: Optional[int] = None
     init: Optional[str] = None
+    kind: str = ""  # "" (plain), or a free-form type with its own rules, e.g. "ind"
 
 
 @dataclass
@@ -81,6 +82,12 @@ class Statement:
     ind_hi: Optional[str] = None
     ind_lo: Optional[str] = None
     ind_eq: Optional[str] = None
+    # FOR loops (free-form only): factor1 is the index variable, expr the
+    # start value, then these. `down` is DOWNTO instead of TO.
+    limit: Optional[str] = None
+    step: Optional[str] = None
+    down: bool = False
+    line: int = 0  # source line, for error messages (free-form only)
 
 
 @dataclass
@@ -94,9 +101,15 @@ class Program:
 
 
 def parse_rpgle(source: str) -> Program:
-    """Tokenizes fixed-form RPG IV source into F-spec/D-spec/C-spec
-    records, in source order.
+    """Tokenizes RPG IV source into F-spec/D-spec/C-spec records, in
+    source order. Source starting with **FREE is free-form and goes to
+    freeform.parse_free, which produces the same records.
     """
+    from .freeform import is_free, parse_free  # local: freeform imports this module
+
+    if is_free(source):
+        return parse_free(source)
+
     prog = Program()
 
     for raw in source.split("\n"):

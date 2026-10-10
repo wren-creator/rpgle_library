@@ -118,6 +118,15 @@ class DiskCliTest(unittest.TestCase):
         self.assertIn("0000048.75", out)
         self.assertNotIn("Customer not found", out)
 
+    def test_free_form_program_gives_the_same_answers(self):
+        self._load()
+        args = ["run", str(self.progs / "custinq-free.rpgle"), "--dspf", str(self.progs / "custinq.dspf"), "--db", self.db]
+        code, out = self._main(args, "20\n99\nF3\n")
+        self.assertEqual(code, 0)
+        self.assertIn("Bob Brewer", out)
+        self.assertIn("0000048.75", out)
+        self.assertIn("Customer not found", out)
+
     def test_not_found_shows_the_message(self):
         self._load()
         code, out = self._main(["run", str(self.progs / "custinq.rpgle"), "--db", self.db], "99\nF3\n")
