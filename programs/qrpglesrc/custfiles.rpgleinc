@@ -1,0 +1,12 @@
+// CUSTFILES.RPGLEINC -- the files the customer programs share. Any
+// program that needs them says /copy qrpglesrc,custfiles instead of
+// repeating the declarations. The guard makes it safe to include twice,
+// which happens as soon as one copybook includes another.
+
+/if defined(CUSTFILES_INCLUDED)
+/eof
+/endif
+/define CUSTFILES_INCLUDED
+
+dcl-f custmast keyed;
+dcl-f custinq workstn;

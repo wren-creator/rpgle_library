@@ -29,7 +29,8 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Optional
+from pathlib import Path
+from typing import Iterable, Optional
 
 from ._helpers import col
 from .errors import RpgleError
@@ -152,11 +153,33 @@ class Program:
     statements: list[Statement] = field(default_factory=list)
 
 
-def parse_rpgle(source: str) -> Program:
+def parse_rpgle(
+    source: str,
+    path: Optional[Path] = None,
+    include_dirs: Optional[Iterable[Path]] = None,
+    defines: Iterable[str] = (),
+) -> Program:
     """Tokenizes RPG IV source into F-spec/D-spec/C-spec records, in
     source order. Source starting with **FREE is free-form and goes to
     freeform.parse_free, which produces the same records.
+
+    /COPY, /INCLUDE and the /IF /DEFINE family are expanded first (see
+    include.py). path is where the source came from, which is where
+    includes are looked for before include_dirs; defines pre-defines
+    names for /IF DEFINED. Errors inside a copy member name the member.
     """
+    from .include import expand_includes, has_directives, remap_error
+
+    if not has_directives(source):
+        return _parse(source)
+    text, origin = expand_includes(source, path, include_dirs, defines)
+    try:
+        return _parse(text)
+    except RpgleError as e:
+        raise RpgleError(remap_error(str(e), origin)) from None
+
+
+def _parse(source: str) -> Program:
     from .freeform import is_free, parse_free  # local: freeform imports this module
 
     if is_free(source):

@@ -54,6 +54,8 @@ rpgle load programs/custmast.pf programs/custmast.csv --db shop.db     # fill a 
 rpgle run programs/custinq.rpgle --db shop.db                          # customer inquiry: CHAIN by number
 ```
 
+`/COPY` members are found next to the program and in any `-I folder`, and `-D NAME` defines a name for `/IF DEFINED(NAME)`.
+
 Programs with `DISK` files need `--db`, and each file's layout comes from `<filename>.pf` (physical-file DDS) next to the program, or in `--pf-dir`. `custinq.rpgle` is the worked example: a screen, a `CHAIN`, and the not-found indicator.
 
 Each `EXFMT` is drawn as a 24x80 grid, then it prompts for each input field (press Enter to keep the value shown). Type a function key like `F3` at any prompt to send that key, if the current format declares it. It reads plain stdin and writes plain stdout, so it works over SSH, in a pipe, and in CI. The program ends when the RPG does, or when input runs out.

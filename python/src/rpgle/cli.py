@@ -4,6 +4,7 @@ cli.py
 The `rpgle` command: run an RPG IV program from a terminal.
 
     rpgle run prog.rpgle [--dspf screen.dspf] [--db data.db] [--pf-dir DIR]
+                         [-I includedir ...] [-D NAME ...]
     rpgle load custmast.pf customers.csv --db data.db
 
 The library itself never touches a terminal; it yields plain screen
@@ -212,6 +213,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     run.add_argument("--dspf", help="display file DDS (default: same name with .dspf, if it exists)")
     run.add_argument("--db", help="SQLite database holding the program's DISK files (required if it has any)")
     run.add_argument("--pf-dir", help="folder of <file>.pf DDS files (default: next to the program)")
+    run.add_argument("-I", dest="include_dirs", action="append", default=[], metavar="DIR", help="folder to search for /COPY members (repeatable)")
+    run.add_argument("-D", dest="defines", action="append", default=[], metavar="NAME", help="define NAME for /IF DEFINED(NAME) (repeatable)")
     load = sub.add_parser("load", help="append a CSV file's rows to a DISK file")
     load.add_argument("pf", help="the file's physical-file DDS, e.g. custmast.pf (file name = its stem)")
     load.add_argument("csv", help="CSV with a header row naming the fields")
@@ -231,7 +234,12 @@ def main(argv: Optional[list[str]] = None) -> int:
             return 0
 
         rpg_path = pathlib.Path(args.source)
-        prog = parse_rpgle(rpg_path.read_text())
+        prog = parse_rpgle(
+            rpg_path.read_text(),
+            path=rpg_path,
+            include_dirs=[pathlib.Path(d) for d in args.include_dirs],
+            defines=args.defines,
+        )
         dds = _load_dds(rpg_path, args.dspf)
         has_disk = any((f.device or "").upper() == "DISK" for f in prog.files)
         if has_disk and not args.db:

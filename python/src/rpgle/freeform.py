@@ -78,10 +78,7 @@ def _split(source: str) -> list[tuple[str, int]]:
         if t.upper().startswith("**FREE"):
             lines[i] = ""
         elif t.startswith("/") and t[1:2].isalpha():
-            word = t[1:].split()[0].lower()
-            if word in ("copy", "include"):
-                raise RpgleError(f"line {i + 1}: /{word} is not supported yet")
-            lines[i] = ""
+            lines[i] = ""  # /FREE, /END-FREE, /EJECT ...: /COPY and friends were expanded already
     text = "\n".join(lines)
 
     out: list[tuple[str, int]] = []

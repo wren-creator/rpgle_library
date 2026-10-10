@@ -119,6 +119,7 @@ evalExpr("%TRIM('  hi  ')", { vars: {}, indicators: {} });   // 'hi'
 | Data structures, `LIKE`, prototypes | Free-form, Python only | |
 | Arrays (`dim`), `%elem`, `%lookup`, `sorta`, arrays of data structures | Free-form, Python only | Fixed-form `DIM` raises an error |
 | DISK file I/O: `CHAIN`, `SETLL`, `SETGT`, `READ`, `READE`, `READP`, `READPE`, `WRITE`, `UPDATE`, `DELETE`, `KLIST`/`KFLD`, `%EOF`/`%FOUND`/`%EQUAL` | Python only | Backed by SQLite. See [`docs/LANGUAGE.md`](./docs/LANGUAGE.md) |
+| `/COPY`, `/INCLUDE`, `/IF DEFINED`/`/DEFINE`/`/EOF` | Python only | See [`docs/LANGUAGE.md`](./docs/LANGUAGE.md) |
 | `CALL` | No | |
 | `%TRIM`, `%LEN`, `%SUBST` | Yes | |
 | `%TRIML`/`%TRIMR`, `%UPPER`/`%LOWER`, `%SCAN`, `%REPLACE`, `%CHAR`, `%DEC`/`%DECH`, `%INT`/`%INTH`, `%ABS`, `%SQRT`, `%REM`, `%DIV`, `%MIN`/`%MAX`, `%EOF`/`%FOUND`/`%EQUAL` | Python only | Not yet: `%EDITC`, `%EDITW`, `%XLATE`, `%CHECK`, date and time functions |
@@ -191,7 +192,7 @@ Goal: run and test RPG IV logic on Linux, macOS or Windows, with no IBM i licens
   - [x] 3d. `dcl-proc`, `dcl-pi` (reference, `const`, `value`, `*nopass`), return values, recursion, `callp` and calls inside expressions
 - [ ] **4. Calls and structures.** (Data structures and `CALLP` shipped with 3c and 3d.)
   - [x] 4a. Arrays: `dim`, `%elem`, `%lookup`, `sorta`, arrays of data structures, array parameters
-  - [ ] 4b. `/COPY` includes
+  - [x] 4b. `/COPY` and `/INCLUDE`, with `/IF DEFINED`, `/DEFINE`, `/EOF` guards (`-I`, `-D`)
   - [ ] 4c. `CALL` between programs
   - [ ] 4d. `PRINTER` files
 

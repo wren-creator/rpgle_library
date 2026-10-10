@@ -199,6 +199,46 @@ An array name on its own (`x = arr;`) is an error that tells you to subscript it
 
 Not supported: arrays inside data structures (a `dim` on a subfield), arrays of data structures as `chain`/`write` targets, `%subarr`, `%xfoot`, `sorta` on a data structure array, `*in(n)` indicator arrays, compile-time and pre-runtime arrays (`**CTDATA`), and fixed-form `DIM` (which is now an error rather than being silently ignored, as it was before).
 
+## Source Includes (`/COPY`)
+
+*Python port only so far.* `/COPY` and `/INCLUDE` splice another file into the source before it is parsed, in fixed-form and free-form alike. The preprocessor lives in `python/src/rpgle/include.py`.
+
+```
+/copy qrpglesrc,custfiles        // shared declarations
+```
+
+On IBM i a member is named `library/file,member`. Here that maps to paths on disk, searched in the including file's folder and then each `-I` folder:
+
+| Directive | Looks for (in each folder, in this order) |
+|---|---|
+| `/copy defs` | `defs` |
+| `/copy qrpglesrc,defs` | `qrpglesrc/defs`, then `defs` |
+| `/copy lib/qrpglesrc,defs` | `lib/qrpglesrc/defs`, `qrpglesrc/defs`, then `defs` |
+| `/copy 'inc/defs.rpgleinc'` | exactly that path |
+
+Each name is tried as written, in lower case and in upper case, with no extension and then `.rpgleinc` `.rpgle` `.copy` `.inc` `.rpg` `.sqlrpgle`. Includes nest up to 32 deep; a file that includes itself, directly or not, is an error.
+
+**Guards.** Real copybooks protect themselves from being included twice, so the conditional directives are supported:
+
+```
+/if defined(CUSTFILES_INCLUDED)
+/eof
+/endif
+/define CUSTFILES_INCLUDED
+```
+
+`/DEFINE name`, `/UNDEFINE name`, `/IF DEFINED(name)`, `/IF NOT DEFINED(name)`, `/ELSEIF`, `/ELSE`, `/ENDIF` and `/EOF` (stop reading this member, even inside an open `/IF`, which is what makes the guard above work). Names are case-insensitive. A branch that isn't taken is skipped whole: its `/COPY`s aren't opened and its `/DEFINE`s don't happen. Conditions must balance within each member. Other conditions (`*VERSION`, `*CRTBNDRPG`) are an error, not a silent false. `-D NAME` on the command line pre-defines a name.
+
+**Errors name the real file.** The parser sees one merged text, but a mistake in a copybook is reported as `custfiles.rpgleinc:7: ...`, not a line number in text nobody wrote.
+
+**Safety.** An include can only resolve inside the program's own folder or an `-I` folder. `/copy '/etc/passwd'` and `/copy '../../elsewhere'` are refused, so running someone else's source can't make it read arbitrary files. Add an `-I` folder to allow a shared library of copybooks.
+
+A `**FREE` line at the top of a member is dropped: a member can't change the source's form, and a fixed-form program can't include a free-form member or the reverse. Other slash lines (`/FREE`, `/END-FREE`, `/EJECT`, `/SPACE`, `/TITLE`) pass through and are ignored.
+
+```bash
+rpgle run prog.rpgle -I ~/rpg/copybooks -D DEBUG
+```
+
 ## DISK Files
 
 *Python port only so far.* A program with `DISK` F-specs runs against a `Database` (SQLite) and a dict of physical-file DDS, one per file:

@@ -120,7 +120,7 @@ class ParseTest(unittest.TestCase):
             ("**free\nchain(e) k custmast;\n", "%ERROR"),
             ("**free\ndcl-s a date;\n", "not supported"),
             ("**free\ndcl-s a char(3) dim(0);\n", "at least one"),
-            ("**free\n/copy foo\n", "/copy"),
+            ("**free\n/copy foo\n", "can't find"),
             ("**free\nt = 'oops;\n", "unterminated"),
             ("**free\nfor i = 1;\n", "for needs"),
         ]:
