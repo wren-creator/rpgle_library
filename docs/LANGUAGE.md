@@ -91,7 +91,7 @@ A statement is everything up to a semicolon: it can span lines, and several can 
 | Area | Supported |
 |---|---|
 | Declarations | `ctl-opt` (ignored), `dcl-s`, `dcl-c`, `dcl-f` |
-| Types | `char`, `varchar` (treated as `char`), `ind`, `int`, `uns`, `packed`, `zoned`, `bindec`, `float`, `like(x)` of an earlier `dcl-s`; `inz` with a value, `*blank`, `*zero`, `*on`, `*off` |
+| Types | `char`, `varchar` (no padding, `%LEN` is its content length, truncated at its declared size), `ind`, `int`, `uns`, `packed`, `zoned`, `bindec`, `float`, `like(x)` of an earlier `dcl-s`; `inz` with a value, `*blank`, `*zero`, `*on`, `*off` |
 | Control flow | `if`/`elseif`/`else`/`endif`, `dow`, `dou`, `enddo`, `for ... to\|downto ... by`/`endfor`, `select`/`when`/`other`/`endsl`, `leave`, `iter`, `return` |
 | Subroutines | `begsr`, `endsr`, `exsr` |
 | Assignment | `x = expr;`  `x += expr;` (also `-=` `*=` `/=`)  `eval x = expr;`  `*in03 = *on;` |
@@ -195,7 +195,24 @@ primary    := NUMBER | STRING | '*ON' | '*OFF'
 
 ### Built-in functions
 
-`%TRIM(str)`, `%LEN(str)`, `%SUBST(str : start [: len])` (1-based start, matching real RPG), and the file-status trio `%EOF`, `%FOUND`, `%EQUAL` (Python port, see "DISK Files"). Anything else throws `Unsupported RPG built-in`.
+The JS and Go ports have `%TRIM(str)`, `%LEN(str)` and `%SUBST(str : start [: len])` (1-based start, matching real RPG). The Python port has these and more:
+
+| Function | Result |
+|---|---|
+| `%TRIM` `%TRIML` `%TRIMR` | text with blanks removed from both ends, the left, the right |
+| `%UPPER` `%LOWER` | text in that case |
+| `%LEN(x)` | length: the declared size of a `char`, the current length of a `varchar` |
+| `%SUBST(s : start [: len])` | part of a string |
+| `%SCAN(find : in [: start])` | 1-based position, or 0 if absent |
+| `%REPLACE(new : in [: start [: len]])` | replaces `len` characters at `start`; `len` of 0 inserts |
+| `%CHAR(x)` | number or indicator as text. A numeric variable keeps its declared decimals: `%CHAR(money)` for a `packed(9:2)` holding 5 is `5.00`, but `%CHAR(money + 1)` is `6` |
+| `%DEC(x : len : dec)` `%DECH` | number with `dec` decimals, truncated (`%DECH` rounds half up) |
+| `%INT(x)` `%INTH` | whole number, truncated (`%INTH` rounds) |
+| `%ABS` `%SQRT` `%REM(a : b)` `%DIV(a : b)` | what they say; `%REM`/`%DIV` by zero is an error |
+| `%MIN(a : b ...)` `%MAX(a : b ...)` | smallest or largest, numbers or text |
+| `%EOF` `%FOUND` `%EQUAL` | file status, see "DISK Files" |
+
+Text and numbers don't mix: `'a' + 1` is an error, not a silent NaN. Convert with `%CHAR` or `%DEC`. `+` between two character values joins them, padding included, so `%TRIM` the pieces you don't want padded. Anything not listed throws `Unsupported RPG built-in`.
 
 ### Figurative constants
 

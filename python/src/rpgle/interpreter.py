@@ -105,7 +105,13 @@ def build_vars(prog: Program, dds: DDS, pfs: Optional[dict[str, PhysicalFile]] =
         key = d.name.lower()
         if d.dec is None:
             init = d.init.strip("'") if d.init is not None else ""
-            variables[key] = Var(type="A", length=d.length, dec=0, value=pad_end_trunc(init, d.length), kind=d.kind)
+            variables[key] = Var(
+                type="A",
+                length=d.length,
+                dec=0,
+                value=init[: d.length] if d.kind == "varchar" else pad_end_trunc(init, d.length),
+                kind=d.kind,
+            )
         else:
             variables[key] = Var(type="N", length=d.length, dec=d.dec, value=float(d.init) if d.init is not None else 0.0)
 
@@ -414,6 +420,8 @@ def _assign(variables: dict[str, Var], indicators: dict[str, bool], lvalue: str,
         raise RpgleError(f"Unknown RPG variable on assignment: {lvalue}")
     if v.kind == "ind":
         v.value = "1" if as_bool(rvalue) else "0"
+    elif v.kind == "varchar":
+        v.value = as_string(rvalue)[: v.length]  # no padding: its length is its content
     elif v.type == "A":
         v.value = pad_end_trunc(as_string(rvalue), v.length)
     else:

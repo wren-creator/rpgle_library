@@ -119,7 +119,8 @@ evalExpr("%TRIM('  hi  ')", { vars: {}, indicators: {} });   // 'hi'
 | Data structures, `LIKE`, arrays, prototypes | No | |
 | DISK file I/O: `CHAIN`, `SETLL`, `SETGT`, `READ`, `READE`, `READP`, `READPE`, `WRITE`, `UPDATE`, `DELETE`, `KLIST`/`KFLD`, `%EOF`/`%FOUND`/`%EQUAL` | Python only | Backed by SQLite. See [`docs/LANGUAGE.md`](./docs/LANGUAGE.md) |
 | `CALL` | No | |
-| `%TRIM`, `%LEN`, `%SUBST`, `%EOF`, `%FOUND`, `%EQUAL` | Yes | File-status BIFs are Python only.  Other BIFs (`%CHAR`, `%DEC`, `%EDITC`, ...) are not |
+| `%TRIM`, `%LEN`, `%SUBST` | Yes | |
+| `%TRIML`/`%TRIMR`, `%UPPER`/`%LOWER`, `%SCAN`, `%REPLACE`, `%CHAR`, `%DEC`/`%DECH`, `%INT`/`%INTH`, `%ABS`, `%SQRT`, `%REM`, `%DIV`, `%MIN`/`%MAX`, `%EOF`/`%FOUND`/`%EQUAL` | Python only | Not yet: `%EDITC`, `%EDITW`, `%XLATE`, `%CHECK`, date and time functions |
 
 Full detail: [`docs/LANGUAGE.md`](./docs/LANGUAGE.md).
 
@@ -184,7 +185,7 @@ Goal: run and test RPG IV logic on Linux, macOS or Windows, with no IBM i licens
 - [x] **2. `DISK` file I/O on SQLite.** Multi-file F-specs, `CHAIN`, `READ`, `READE`, `SETLL`, `WRITE`, `UPDATE`, `DELETE`, `%EOF`, `%FOUND`, `%EQUAL` (Python; JS and Go to follow). Try it (after `pip install -e python` in an active venv, see [`python/README.md`](./python/README.md)): `rpgle load programs/custmast.pf programs/custmast.csv --db shop.db`, then `rpgle run programs/custinq.rpgle --db shop.db`
 - [ ] **3. Free-form RPG.**
   - [x] 3a. `**FREE` parser, `dcl-s`/`dcl-c`/`dcl-f`, `elseif`, `dou`, `for`, `iter`, `NOT`, `+=`, `ind`
-  - [ ] 3b. More types and built-in functions (`%char`, `%dec`, `%scan`, `%replace`, `%upper`, string `+`, `varchar`)
+  - [x] 3b. Built-in functions (`%char`, `%dec`, `%scan`, `%replace`, `%upper`, `%rem`, ...), string `+`, real `varchar`
   - [ ] 3c. `dcl-ds`
   - [ ] 3d. `dcl-proc`, `dcl-pi`, `dcl-pr`, `callp`
 - [ ] **4. Calls and structures.** Data structures, arrays, `CALL`/`CALLP`, `/COPY`, `PRINTER` files

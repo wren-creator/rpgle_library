@@ -233,6 +233,164 @@ def _tokenize(src: str) -> list[_Token]:
     return tokens
 
 
+# ── built-in functions ───────────────────────────────────────────
+# Each takes (name, args, first_var) where first_var is the Var if the
+# first argument was a bare variable name (else None).
+
+
+def _arity(name: str, args: list, lo: int, hi: Optional[int] = None) -> None:
+    hi = lo if hi is None else hi
+    if not lo <= len(args) <= hi:
+        want = str(lo) if lo == hi else f"{lo} to {hi}"
+        raise RpgleError(f"{name} takes {want} argument(s), got {len(args)}")
+
+
+def _num(name: str, v: Any) -> float:
+    if isinstance(v, str):
+        try:
+            return float(v.strip())
+        except ValueError:
+            raise RpgleError(f"{name}: {v!r} is not a number") from None
+    return as_float(v)
+
+
+def _trunc(n: float, dec: int) -> float:
+    f = 10**dec
+    return math.trunc(n * f) / f
+
+
+def _half_adjust(n: float, dec: int) -> float:
+    f = 10**dec
+    return math.copysign(math.floor(abs(n) * f + 0.5), n) / f
+
+
+def _bif_char(name, args, var):
+    _arity(name, args, 1)
+    v = args[0]
+    if isinstance(v, str):
+        return v
+    if isinstance(v, bool):
+        return "1" if v else "0"
+    if var is not None and var.type == "N" and var.dec:
+        return f"{float(v):.{var.dec}f}"
+    return _format_number_for_string(float(v))
+
+
+def _bif_dec(name, args, var, half=False):
+    _arity(name, args, 3)
+    n, dec = _num(name, args[0]), int(as_float(args[2]))
+    return _half_adjust(n, dec) if half else _trunc(n, dec)
+
+
+def _bif_int(name, args, var, half=False):
+    _arity(name, args, 1)
+    n = _num(name, args[0])
+    return float(_half_adjust(n, 0) if half else math.trunc(n))
+
+
+def _bif_rem(name, args, var):
+    _arity(name, args, 2)
+    a, b = _num(name, args[0]), _num(name, args[1])
+    if b == 0:
+        raise RpgleError(f"{name}: division by zero")
+    return a - math.trunc(a / b) * b
+
+
+def _bif_div(name, args, var):
+    _arity(name, args, 2)
+    a, b = _num(name, args[0]), _num(name, args[1])
+    if b == 0:
+        raise RpgleError(f"{name}: division by zero")
+    return float(math.trunc(a / b))
+
+
+def _bif_sqrt(name, args, var):
+    _arity(name, args, 1)
+    n = _num(name, args[0])
+    if n < 0:
+        raise RpgleError("%SQRT of a negative number")
+    return math.sqrt(n)
+
+
+def _bif_minmax(name, args, var):
+    _arity(name, args, 2, 99)
+    pick = min if name == "%MIN" else max
+    if all(isinstance(a, str) for a in args):
+        return pick(args, key=lambda a: a.rstrip())
+    return pick(_num(name, a) for a in args)
+
+
+def _bif_scan(name, args, var):
+    _arity(name, args, 2, 3)
+    needle, hay = as_string(args[0]), as_string(args[1])
+    start = int(as_float(args[2])) if len(args) == 3 else 1
+    if needle == "" or start < 1:
+        return 0.0
+    return float(hay.find(needle, start - 1) + 1)
+
+
+def _bif_replace(name, args, var):
+    _arity(name, args, 2, 4)
+    repl, src = as_string(args[0]), as_string(args[1])
+    start = int(as_float(args[2])) if len(args) >= 3 else 1
+    length = int(as_float(args[3])) if len(args) == 4 else len(repl)
+    if start < 1:
+        raise RpgleError("%REPLACE: start must be 1 or more")
+    return src[: start - 1] + repl + src[start - 1 + length :]
+
+
+def _bif_subst(name, args, var):
+    _arity(name, args, 2, 3)
+    s = as_string(args[0])
+    start = int(as_float(args[1])) - 1  # RPG %SUBST start is 1-based
+    length = len(s) - start if len(args) <= 2 else int(as_float(args[2]))
+    start = max(0, min(start, len(s)))
+    end = max(start, min(start + length, len(s)))
+    return s[start:end]
+
+
+def _bif_len(name, args, var):
+    _arity(name, args, 1)
+    return float(len(as_string(args[0])))
+
+
+def _bif_abs(name, args, var):
+    _arity(name, args, 1)
+    return abs(_num(name, args[0]))
+
+
+def _str_fn(fn):
+    def run(name, args, var):
+        _arity(name, args, 1)
+        return fn(as_string(args[0]))
+
+    return run
+
+
+_BIFS = {
+    "%TRIM": _str_fn(str.strip),
+    "%TRIML": _str_fn(str.lstrip),
+    "%TRIMR": _str_fn(str.rstrip),
+    "%UPPER": _str_fn(str.upper),
+    "%LOWER": _str_fn(str.lower),
+    "%LEN": _bif_len,
+    "%SUBST": _bif_subst,
+    "%CHAR": _bif_char,
+    "%DEC": _bif_dec,
+    "%DECH": lambda n, a, v: _bif_dec(n, a, v, half=True),
+    "%INT": _bif_int,
+    "%INTH": lambda n, a, v: _bif_int(n, a, v, half=True),
+    "%ABS": _bif_abs,
+    "%REM": _bif_rem,
+    "%DIV": _bif_div,
+    "%SQRT": _bif_sqrt,
+    "%MIN": _bif_minmax,
+    "%MAX": _bif_minmax,
+    "%SCAN": _bif_scan,
+    "%REPLACE": _bif_replace,
+}
+
+
 class _Parser:
     def __init__(self, tokens: list[_Token], ctx: Context):
         self.tokens = tokens
@@ -309,7 +467,13 @@ class _Parser:
         while (t := self._peek()) and t.type == "op" and t.value in ("+", "-"):
             op = self._next().value
             rhs = self._parse_term()
-            v = as_float(v) + as_float(rhs) if op == "+" else as_float(v) - as_float(rhs)
+            if isinstance(v, str) or isinstance(rhs, str):
+                if op == "+" and isinstance(v, str) and isinstance(rhs, str):
+                    v = v + rhs  # + joins character values, padding and all (use %TRIM)
+                else:
+                    raise RpgleError(f"Can't use {op} between text and a number, or - between two texts; convert with %CHAR or %DEC")
+            else:
+                v = as_float(v) + as_float(rhs) if op == "+" else as_float(v) - as_float(rhs)
         return v
 
     def _parse_term(self) -> Any:
@@ -379,24 +543,23 @@ class _Parser:
     def _parse_func_call(self, name: str) -> Any:
         if name in ("%EOF", "%FOUND", "%EQUAL"):
             return self._parse_file_status(name)
+        fn = _BIFS.get(name)
+        if fn is None:
+            raise RpgleError(f"Unsupported RPG built-in: {name}")
         self._expect_op("(")
+        # Remember if the first argument is a bare variable: %CHAR needs
+        # its declared decimals, which the value alone doesn't carry.
+        first = self._peek()
+        before = self.pos
         args = [self.parse_expr()]
+        first_var = None
+        if self.pos - before == 1 and first is not None and first.type == "name":
+            first_var = self.ctx.vars.get(first.value.lower())
         while (t := self._peek()) and t.type == "op" and t.value == ":":
             self._next()
             args.append(self.parse_expr())
         self._expect_op(")")
-        if name == "%TRIM":
-            return as_string(args[0]).strip()
-        if name == "%LEN":
-            return float(len(as_string(args[0])))
-        if name == "%SUBST":
-            s = as_string(args[0])
-            start = int(as_float(args[1])) - 1  # RPG %SUBST start is 1-based
-            length = len(s) - start if len(args) <= 2 else int(as_float(args[2]))
-            start = max(0, min(start, len(s)))
-            end = max(start, min(start + length, len(s)))
-            return s[start:end]
-        raise RpgleError(f"Unsupported RPG built-in: {name}")
+        return fn(name, args, first_var)
 
     def _read_var(self, name: str) -> Any:
         key = name.lower()

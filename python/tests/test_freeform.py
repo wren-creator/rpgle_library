@@ -367,6 +367,30 @@ write outrec;
 """)
         self.assertEqual(self.msgs(), ["LT"])
 
+    def test_varchar_keeps_its_length_and_char_pads(self):
+        self.run_free("""
+dcl-s v varchar(20); dcl-s c char(5);
+v = 'ab'; c = 'ab';
+num = %len(v); write outrec;
+num = %len(c); write outrec;
+v = v + 'cd';
+num = %len(v); write outrec;
+v = 'this is far too long for the field';
+num = %len(v); write outrec;
+""")
+        self.assertEqual(self.nums(), [2.0, 5.0, 4.0, 20.0])
+
+    def test_building_text_and_numbers_together(self):
+        self.run_free("""
+dcl-s total packed(9:2) inz(48.75);
+dcl-s label varchar(40);
+chain 20 custmast;
+label = %trim(name) + ' owes ' + %char(total);
+msg = label;
+write outrec;
+""")
+        self.assertEqual(self.msgs(), ["BOB owes 48.75"])
+
     def test_read_loop_with_eof(self):
         self.run_free("""
 dcl-s t packed(9:2);
