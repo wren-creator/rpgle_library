@@ -637,154 +637,192 @@ def run_program(
             db.commit()
 
 
+@dataclass
+class _Frame:
+    """One running body of code: the main line, later each procedure
+    call. Everything that must not leak between calls lives here, so a
+    recursive procedure gets a fresh copy of each on every call.
+    """
+
+    instrs: list[Instr]
+    subroutines: dict[str, int]
+    variables: Any  # dict[str, Var], or a ChainMap(locals, globals) inside a procedure
+    ctx: Context
+    ds_members: dict[str, list[tuple[str, DSpec]]]
+    call_stack: list[int] = field(default_factory=list)  # EXSR return addresses
+    for_state: dict[int, tuple[float, float]] = field(default_factory=dict)  # FORTEST index -> (limit, by)
+
+
+class _Runtime:
+    """State shared by every frame of one program run."""
+
+    def __init__(self, dds: DDS, indicators: dict[str, bool], files: FileRuntime):
+        self.dds = dds
+        self.indicators = indicators  # global, as in RPG: *INnn and *INLR are shared by every procedure
+        self.files = files
+
+    def exec(self, frame: _Frame) -> Generator[ScreenData, Optional[Resume], Any]:
+        """Runs one frame to its RETURN (or its end). Yields a ScreenData
+        at every EXFMT. The generator's return value is the RETURN value.
+        """
+        dds, indicators, files = self.dds, self.indicators, self.files
+        instrs, subroutines = frame.instrs, frame.subroutines
+        variables, ctx, ds_members = frame.variables, frame.ctx, frame.ds_members
+        call_stack, for_state = frame.call_stack, frame.for_state
+        pc = 0
+        last_div_remainder = 0.0
+
+        while pc < len(instrs):
+            instr = instrs[pc]
+            op = instr.op
+
+            if instr.cond is not None:
+                negated, num = instr.cond
+                if indicators.get(num, False) == negated:  # condition not met
+                    pc += 1
+                    continue
+
+            if op == "NOP":
+                pc += 1
+
+            elif op == "ENDSR":
+                if not call_stack:
+                    raise RpgleError("ENDSR with no active EXSR call")
+                pc = call_stack.pop()
+
+            elif op == "EVAL":
+                lvalue, rvalue_src = split_assignment(instr.expr)
+                rvalue = eval_expr(rvalue_src, ctx)
+                _assign(variables, indicators, lvalue, rvalue)
+                pc += 1
+
+            elif op in ("IF", "WHEN"):
+                cond = eval_expr(instr.expr, ctx)
+                pc = pc + 1 if as_bool(cond) else instr.false_target
+
+            elif op == "OTHER":
+                pc += 1
+
+            elif op == "JMP":
+                pc = instr.target
+
+            elif op == "DOW":
+                cond = eval_expr(instr.expr, ctx)
+                pc = pc + 1 if as_bool(cond) else instr.false_target
+
+            elif op == "ENDDO":
+                pc = instr.target
+
+            elif op == "LEAVE":
+                pc = instr.target
+
+            elif op == "DOUTEST":
+                pc = pc + 1 if as_bool(eval_expr(instr.expr, ctx)) else instr.target
+
+            elif op == "FORINIT":
+                _assign(variables, indicators, instr.factor1, eval_expr(instr.expr, ctx))
+                limit = as_float(eval_expr(instr.limit, ctx))
+                by = as_float(eval_expr(instr.step, ctx)) if instr.step else 1.0
+                if by <= 0:
+                    raise RpgleError(f"FOR {instr.factor1}: BY must be positive (use DOWNTO to count down)")
+                for_state[pc + 1] = (limit, by)
+                pc += 1
+
+            elif op == "FORTEST":
+                limit, _ = for_state[pc]
+                value = as_float(_read_value(variables, instr.factor1))
+                keep_going = value >= limit if instr.down else value <= limit
+                pc = pc + 1 if keep_going else instr.false_target
+
+            elif op == "FORSTEP":
+                _, by = for_state[instr.target]
+                value = as_float(_read_value(variables, instr.factor1))
+                _assign(variables, indicators, instr.factor1, value - by if instr.down else value + by)
+                pc = instr.target
+
+            elif op == "EXSR":
+                target = subroutines.get(instr.sub_target)
+                if target is None:
+                    raise RpgleError(f"Unknown RPG subroutine: {instr.sub_target}")
+                call_stack.append(pc + 1)
+                pc = target
+
+            elif op == "DIV":
+                f1 = _numeric_operand(variables, instr.factor1)
+                f2 = _numeric_operand(variables, instr.factor2)
+                quotient = math.trunc(f1 / f2)
+                last_div_remainder = f1 - quotient * f2
+                _assign(variables, indicators, instr.result, float(quotient))
+                pc += 1
+
+            elif op == "MVR":
+                _assign(variables, indicators, instr.result, last_div_remainder)
+                pc += 1
+
+            elif op == "EXFMT":
+                fmt = next((f for n, f in dds.formats.items() if n.upper() == instr.format.upper()), None)
+                if fmt is None:
+                    raise RpgleError(f"Unknown DDS record format: {instr.format}")
+                rendered = render_format(fmt, variables, indicators)
+
+                resume = yield ScreenData(
+                    format_name=fmt.name,
+                    fields=rendered.fields,
+                    cursor=rendered.cursor,
+                    keys=fmt.keys,
+                    input_map=rendered.input_map,
+                )
+
+                # Response indicators reset before applying this read's key,
+                # scoped to only the indicators this format's own CF/CA
+                # keywords own (real RPG behavior -- other formats' key
+                # indicators are untouched).
+                for num in fmt.keys.values():
+                    indicators[num] = False
+                ind_for_key = fmt.keys.get(resume.key) if resume else None
+                if ind_for_key:
+                    indicators[ind_for_key] = True
+
+                for field_name in rendered.input_map.values():
+                    if resume and resume.values and field_name in resume.values:
+                        _assign(variables, indicators, field_name, resume.values[field_name])
+                pc += 1
+
+            elif op == "CLEAR":
+                _clear(instr.expr, variables, ds_members)
+                pc += 1
+
+            elif op in FILE_OPS:
+                files.exec(
+                    instr,
+                    variables,
+                    lambda name, value: _assign(variables, indicators, name, value),
+                    lambda num, on: indicators.__setitem__(num, on),
+                    lambda src: eval_expr(src, ctx),
+                )
+                pc += 1
+
+            elif op == "RETURN":
+                return None
+
+            else:
+                raise RpgleError(f"Unimplemented RPG instruction: {op}")
+        return None
+
+
 def _run_program(
     prog: Program, dds: DDS, db: Optional[Database], pfs: Optional[dict[str, PhysicalFile]]
 ) -> Generator[ScreenData, Optional[Resume], None]:
     variables = build_vars(prog, dds, pfs)
     indicators: dict[str, bool] = {}
     compiled = compile_program(prog.statements)
-    instrs = compiled.instrs
-    subroutines = compiled.subroutines
     files = FileRuntime(prog, db, pfs, compiled.klists)
-    ds_members = expand_ds(prog, dds, pfs)
     ctx = Context(vars=variables, indicators=indicators, file_status=files.status)
-    call_stack: list[int] = []
-    for_state: dict[int, tuple[float, float]] = {}  # FORTEST index -> (limit, by)
-    pc = 0
-    last_div_remainder = 0.0
-
-    while pc < len(instrs):
-        instr = instrs[pc]
-        op = instr.op
-
-        if instr.cond is not None:
-            negated, num = instr.cond
-            if indicators.get(num, False) == negated:  # condition not met
-                pc += 1
-                continue
-
-        if op == "NOP":
-            pc += 1
-
-        elif op == "ENDSR":
-            if not call_stack:
-                raise RpgleError("ENDSR with no active EXSR call")
-            pc = call_stack.pop()
-
-        elif op == "EVAL":
-            lvalue, rvalue_src = split_assignment(instr.expr)
-            rvalue = eval_expr(rvalue_src, ctx)
-            _assign(variables, indicators, lvalue, rvalue)
-            pc += 1
-
-        elif op in ("IF", "WHEN"):
-            cond = eval_expr(instr.expr, ctx)
-            pc = pc + 1 if as_bool(cond) else instr.false_target
-
-        elif op == "OTHER":
-            pc += 1
-
-        elif op == "JMP":
-            pc = instr.target
-
-        elif op == "DOW":
-            cond = eval_expr(instr.expr, ctx)
-            pc = pc + 1 if as_bool(cond) else instr.false_target
-
-        elif op == "ENDDO":
-            pc = instr.target
-
-        elif op == "LEAVE":
-            pc = instr.target
-
-        elif op == "DOUTEST":
-            pc = pc + 1 if as_bool(eval_expr(instr.expr, ctx)) else instr.target
-
-        elif op == "FORINIT":
-            _assign(variables, indicators, instr.factor1, eval_expr(instr.expr, ctx))
-            limit = as_float(eval_expr(instr.limit, ctx))
-            by = as_float(eval_expr(instr.step, ctx)) if instr.step else 1.0
-            if by <= 0:
-                raise RpgleError(f"FOR {instr.factor1}: BY must be positive (use DOWNTO to count down)")
-            for_state[pc + 1] = (limit, by)
-            pc += 1
-
-        elif op == "FORTEST":
-            limit, _ = for_state[pc]
-            value = as_float(_read_value(variables, instr.factor1))
-            keep_going = value >= limit if instr.down else value <= limit
-            pc = pc + 1 if keep_going else instr.false_target
-
-        elif op == "FORSTEP":
-            _, by = for_state[instr.target]
-            value = as_float(_read_value(variables, instr.factor1))
-            _assign(variables, indicators, instr.factor1, value - by if instr.down else value + by)
-            pc = instr.target
-
-        elif op == "EXSR":
-            target = subroutines.get(instr.sub_target)
-            if target is None:
-                raise RpgleError(f"Unknown RPG subroutine: {instr.sub_target}")
-            call_stack.append(pc + 1)
-            pc = target
-
-        elif op == "DIV":
-            f1 = _numeric_operand(variables, instr.factor1)
-            f2 = _numeric_operand(variables, instr.factor2)
-            quotient = math.trunc(f1 / f2)
-            last_div_remainder = f1 - quotient * f2
-            _assign(variables, indicators, instr.result, float(quotient))
-            pc += 1
-
-        elif op == "MVR":
-            _assign(variables, indicators, instr.result, last_div_remainder)
-            pc += 1
-
-        elif op == "EXFMT":
-            fmt = next((f for n, f in dds.formats.items() if n.upper() == instr.format.upper()), None)
-            if fmt is None:
-                raise RpgleError(f"Unknown DDS record format: {instr.format}")
-            rendered = render_format(fmt, variables, indicators)
-
-            resume = yield ScreenData(
-                format_name=fmt.name,
-                fields=rendered.fields,
-                cursor=rendered.cursor,
-                keys=fmt.keys,
-                input_map=rendered.input_map,
-            )
-
-            # Response indicators reset before applying this read's key,
-            # scoped to only the indicators this format's own CF/CA
-            # keywords own (real RPG behavior -- other formats' key
-            # indicators are untouched).
-            for num in fmt.keys.values():
-                indicators[num] = False
-            ind_for_key = fmt.keys.get(resume.key) if resume else None
-            if ind_for_key:
-                indicators[ind_for_key] = True
-
-            for field_name in rendered.input_map.values():
-                if resume and resume.values and field_name in resume.values:
-                    _assign(variables, indicators, field_name, resume.values[field_name])
-            pc += 1
-
-        elif op == "CLEAR":
-            _clear(instr.expr, variables, ds_members)
-            pc += 1
-
-        elif op in FILE_OPS:
-            files.exec(
-                instr,
-                variables,
-                lambda name, value: _assign(variables, indicators, name, value),
-                lambda num, on: indicators.__setitem__(num, on),
-                lambda src: eval_expr(src, ctx),
-            )
-            pc += 1
-
-        elif op == "RETURN":
-            return
-
-        else:
-            raise RpgleError(f"Unimplemented RPG instruction: {op}")
+    main = _Frame(
+        instrs=compiled.instrs,
+        subroutines=compiled.subroutines,
+        variables=variables,
+        ctx=ctx,
+        ds_members=expand_ds(prog, dds, pfs),
+    )
+    yield from _Runtime(dds, indicators, files).exec(main)
