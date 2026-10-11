@@ -177,7 +177,7 @@ The pieces, each in its own module so you can use one without the others:
 
 Running an RPG program is running code someone wrote: it can read and write the database you point it at, write spool files where you tell it, and read files in its own folder. Only run source you trust, as you would any script.
 
-What the library does guard against is a program reaching *outside* its folder through the names it uses. File and program names must be IBM i object names (no `/`, no `..`, no dots), and a `/COPY` or `CALL` can only resolve inside the program's own folder or an `-I` folder you named (a symlink out is refused). The `rpgle` command opens only the `--db` file you give it. Malformed source gets an error that names the problem; it was fuzzed with more than two million malformed inputs during development (a smaller deterministic run is `tests/test_fuzz.py`) so that nothing but an `RpgleError` comes out, and a Python traceback from bad input is a bug worth reporting.
+What the library does guard against is a program reaching *outside* its folder through the names it uses. File and program names must be IBM i object names (letters, digits and `_ $ # @`, up to 100 characters; no `/`, no `..`, no dots), and a `/COPY` or `CALL` can only resolve inside the program's own folder or an `-I` folder you named (a symlink out is refused). The `rpgle` command opens only the `--db` file you give it. Malformed source gets an error that names the problem; it was fuzzed with more than two million malformed inputs during development (a smaller deterministic run is `tests/test_fuzz.py`) so that nothing but an `RpgleError` comes out, and a Python traceback from bad input is a bug worth reporting.
 
 ---
 

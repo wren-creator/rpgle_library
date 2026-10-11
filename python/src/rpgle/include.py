@@ -210,14 +210,18 @@ class _Expander:
             for base in self._candidates(spec, quoted):
                 for variant in dict.fromkeys((base, base.lower(), base.upper())):
                     for ext in ([""] if quoted else _EXTENSIONS):
-                        p = (directory / (variant + ext)).resolve()
-                        if p.is_file():
-                            if not any(p == r or r in p.parents for r in self.roots):
-                                raise RpgleError(
-                                    f"/COPY {spec!r} resolves to {p}, outside the program's folder and the "
-                                    "include folders (-I); refusing to read it"
-                                )
-                            return p
+                        try:
+                            p = (directory / (variant + ext)).resolve()
+                            if not p.is_file():
+                                continue
+                        except (OSError, ValueError):
+                            continue  # a name the filesystem won't take (too long, odd bytes) is just not found
+                        if not any(p == r or r in p.parents for r in self.roots):
+                            raise RpgleError(
+                                f"/COPY {spec!r} resolves to {p}, outside the program's folder and the "
+                                "include folders (-I); refusing to read it"
+                            )
+                        return p
         return None
 
 

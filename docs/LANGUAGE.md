@@ -248,7 +248,7 @@ rpgle run prog.rpgle -I ~/rpg/copybooks -D DEBUG
 
 ## Calling Other Programs
 
-*Python port only so far.* One program can call another by name. The called program is found by **lookup**, not registration: `rpgle` looks for `custlookup.rpgle` (then `.rpg`, `.sqlrpgle`) in the calling program's folder, then in the main program's folder, then in each `-I` folder. A library prefix (`'MYLIB/CUSTLOOKUP'`) is accepted and ignored, since there are folders here, not libraries. A program name is an IBM i object name, never a path, so a call can't reach outside the folders it searches. File names (`dcl-f`, F-specs) follow the same rule, because each becomes a file on disk (`custmast.pf`, `custrpt.prtf`): letters, digits and `_ $ # @`, no dots or slashes.
+*Python port only so far.* One program can call another by name. The called program is found by **lookup**, not registration: `rpgle` looks for `custlookup.rpgle` (then `.rpg`, `.sqlrpgle`) in the calling program's folder, then in the main program's folder, then in each `-I` folder. A library prefix (`'MYLIB/CUSTLOOKUP'`) is accepted and ignored, since there are folders here, not libraries. A program name is an IBM i object name, never a path, so a call can't reach outside the folders it searches. File names (`dcl-f`, F-specs) follow the same rule, because each becomes a file on disk (`custmast.pf`, `custrpt.prtf`): letters, digits and `_ $ # @`, up to 100 characters, no dots or slashes.
 
 ```
 // the caller                              // custlookup.rpgle, the called program

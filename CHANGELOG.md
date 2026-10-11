@@ -52,7 +52,7 @@ Found by reviewing the new code before release, and by feeding the parsers and i
 - **Typing letters into a number field crashed the program** with a Python traceback. The interpreter now says `'abc' is not a number, so it can't be put in the numeric field custno`; a blank numeric field reads as zero; and the `rpgle` command refuses letters in a numeric field as you type and asks again. `ScreenData` gained an optional `numeric_fields` for front ends that want to do the same.
 - Division by zero (`1 / 0`, fixed-form `DIV`) is an error, not a `ZeroDivisionError`.
 - A `DOW`, `DOU`, `FOR`, `IF` or `SELECT` with no matching end is an error at compile time, not a crash on a missing jump address.
-- Malformed numbers in a fixed-form D-spec, display DDS, physical DDS or printer DDS length, decimals, line or position column are errors naming the field, not a raw `ValueError`. So are an empty `dcl-f`, negating text (`-'a'`), and a control character in a `/COPY` name.
+- Malformed numbers in a fixed-form D-spec, display DDS, physical DDS or printer DDS length, decimals, line or position column are errors naming the field, not a raw `ValueError`. So are an empty `dcl-f`, negating text (`-'a'`), a control character in a `/COPY` name, and a name too long for the filesystem (which raised `OSError` on Python 3.13 but not 3.14, so it was caught only by running the fuzz test on the version CI uses).
 
 ### Not supported (each is an error, not a silent skip)
 

@@ -208,3 +208,34 @@ def pdds_line_r() -> str:
     from _cols import pdds_line
 
     return pdds_line("R", "R1")
+
+
+class OverlongNameTest(unittest.TestCase):
+    """A name longer than the filesystem allows raised OSError on Python 3.13
+    (and was quietly 'not found' on 3.14), so a fuzz test passed on one
+    version and failed on another. Names are capped, and a lookup the
+    filesystem rejects is simply 'not found'."""
+
+    LONG = "x" * 300
+
+    def test_a_huge_copy_member_is_not_found(self):
+        with self.assertRaises(RpgleError) as cm:
+            parse_rpgle(f"**free\n/copy {self.LONG};\n")
+        self.assertIn("can't find", str(cm.exception))
+
+    def test_a_huge_quoted_copy_path_is_not_found(self):
+        with self.assertRaises(RpgleError):
+            parse_rpgle(f"**free\n/copy '{self.LONG}/{self.LONG}.rpgleinc';\n")
+
+    def test_a_huge_file_name_is_refused_at_the_parser(self):
+        with self.assertRaises(RpgleError):
+            parse_rpgle(f"**free\ndcl-f {self.LONG} workstn;\n")
+
+    def test_a_huge_program_name_is_refused(self):
+        from rpgle.loader import program_key
+
+        with self.assertRaises(RpgleError):
+            program_key(self.LONG)
+
+    def test_ordinary_long_names_still_work(self):
+        self.assertEqual(parse_rpgle("**free\ndcl-f " + "a" * 90 + " workstn;\n").files[0].name, "a" * 90)

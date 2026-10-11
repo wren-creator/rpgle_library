@@ -45,15 +45,17 @@ def pad_start_zero(s: str, length: int) -> str:
 
 
 _OBJECT_NAME = re.compile(r"^[A-Za-z_$#@][A-Za-z0-9_$#@]*$")
+_MAX_OBJECT_NAME = 100  # IBM i allows 10; this is generous but keeps a name well inside any filesystem's limit
 
 
 def is_object_name(name: str) -> bool:
-    """An IBM i object name: letters, digits and _ $ # @, not starting with a digit.
+    """An IBM i object name: letters, digits and _ $ # @, not starting with a digit,
+    up to 100 characters.
 
     File and program names become file names on disk (custmast.pf,
     custlookup.rpgle), so they must never contain a path separator or a dot.
     """
-    return bool(_OBJECT_NAME.match(name))
+    return len(name) <= _MAX_OBJECT_NAME and bool(_OBJECT_NAME.match(name))
 
 
 def digits(text: str, what: str, owner: str) -> int:

@@ -135,8 +135,11 @@ class ProgramLoader:
             for variant in dict.fromkeys((key.lower(), key)):
                 for ext in _PROGRAM_EXTENSIONS:
                     p = d / (variant + ext)
-                    if p.is_file():
-                        return p.resolve()
+                    try:
+                        if p.is_file():
+                            return p.resolve()
+                    except (OSError, ValueError):
+                        continue  # a name the filesystem won't take is just not found
         raise CallError(f"program {key} not found (looked for {key.lower()}.rpgle in {', '.join(str(d) for d in seen)})")
 
     def load(self, key: str, caller_dir: Optional[Path]) -> LoadedProgram:
