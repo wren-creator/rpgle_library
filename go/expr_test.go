@@ -147,3 +147,45 @@ func TestSplitAssignment(t *testing.T) {
 		t.Errorf("SplitAssignment = (%q, %q), want (%q, %q)", lvalue, rvalue, "loctxt", "%TRIM(loctxt)")
 	}
 }
+
+// Character values compare as if blank-padded, as in RPG: a 20-character
+// field holding BOB is equal to 'BOB'. (Parity with the Python port.)
+func TestCharacterComparisonIgnoresTrailingBlanks(t *testing.T) {
+	ctx := &rpgle.Context{
+		Vars: map[string]*rpgle.Var{
+			"name":  {Type: 'A', Length: 20, Dec: 0, Value: rpgle.StringValue("BOB                 ")},
+			"other": {Type: 'A', Length: 5, Dec: 0, Value: rpgle.StringValue("BOB  ")},
+		},
+		Indicators: map[string]bool{},
+	}
+	cases := []struct {
+		src  string
+		want bool
+	}{
+		{"name = 'BOB'", true},
+		{"'BOB' = name", true},
+		{"name <> 'BOB'", false},
+		{"name = other", true},
+		{"name = 'BOBB'", false},
+		{"name < 'BOBB'", true}, // 'BOB' < 'BOBB', padding ignored
+		{"name > 'BOBB'", false},
+		{"name <= 'BOB'", true},
+		{"name >= 'BOB'", true},
+		{"'a' = 'A'", false}, // still case-sensitive
+	}
+	for _, c := range cases {
+		if got := mustEval(t, c.src, ctx).AsBool(); got != c.want {
+			t.Errorf("evalExpr(%q) = %v, want %v", c.src, got, c.want)
+		}
+	}
+}
+
+func TestComparingTextWithANumberIsStillNeverEqual(t *testing.T) {
+	ctx := emptyCtx()
+	if mustEval(t, "'1' = 1", ctx).AsBool() {
+		t.Error("'1' = 1 should be false")
+	}
+	if !mustEval(t, "1 = 1", ctx).AsBool() {
+		t.Error("1 = 1 should be true")
+	}
+}

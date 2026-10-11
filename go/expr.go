@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // expr.go
@@ -96,6 +97,13 @@ func formatNumberForString(n float64) string {
 	return strconv.FormatFloat(n, 'f', -1, 64)
 }
 
+// trimBlanks drops trailing whitespace. RPG compares character data as if
+// both sides were blank-padded, so a 20-character field holding BOB equals
+// 'BOB': trailing blanks never matter.
+func trimBlanks(s string) string {
+	return strings.TrimRightFunc(s, unicode.IsSpace)
+}
+
 func valuesEqual(a, b Value) bool {
 	if a.Kind != b.Kind {
 		return false
@@ -104,7 +112,7 @@ func valuesEqual(a, b Value) bool {
 	case 'N':
 		return a.Num == b.Num
 	case 'S':
-		return a.Str == b.Str
+		return trimBlanks(a.Str) == trimBlanks(b.Str)
 	case 'B':
 		return a.Bool == b.Bool
 	}
@@ -113,7 +121,7 @@ func valuesEqual(a, b Value) bool {
 
 func valueLess(a, b Value) bool {
 	if a.Kind == 'S' && b.Kind == 'S' {
-		return a.Str < b.Str
+		return trimBlanks(a.Str) < trimBlanks(b.Str)
 	}
 	return a.AsFloat() < b.AsFloat()
 }

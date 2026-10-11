@@ -64,3 +64,31 @@ test('splitAssignment splits on the first top-level "="', () => {
   assert.deepEqual(splitAssignment('plrhp = 20'), { lvalue: 'plrhp', rvalueSrc: '20' });
   assert.deepEqual(splitAssignment('loctxt = %TRIM(loctxt)'), { lvalue: 'loctxt', rvalueSrc: '%TRIM(loctxt)' });
 });
+
+// Character values compare as if blank-padded, as in RPG: a 20-character
+// field holding BOB is equal to 'BOB'. (Parity with the Python port.)
+test('character comparison ignores trailing blanks', () => {
+  const ctx = {
+    vars: {
+      name: { type: 'A', length: 20, dec: 0, value: 'BOB'.padEnd(20, ' ') },
+      other: { type: 'A', length: 5, dec: 0, value: 'BOB  ' },
+    },
+    indicators: {},
+  };
+  assert.equal(evalExpr("name = 'BOB'", ctx), true);
+  assert.equal(evalExpr("'BOB' = name", ctx), true);
+  assert.equal(evalExpr("name <> 'BOB'", ctx), false);
+  assert.equal(evalExpr('name = other', ctx), true);
+  assert.equal(evalExpr("name = 'BOBB'", ctx), false);
+  assert.equal(evalExpr("name < 'BOBB'", ctx), true); // 'BOB' < 'BOBB', padding ignored
+  assert.equal(evalExpr("name > 'BOBB'", ctx), false);
+  assert.equal(evalExpr("name <= 'BOB'", ctx), true);
+  assert.equal(evalExpr("name >= 'BOB'", ctx), true);
+  assert.equal(evalExpr("'a' = 'A'", ctx), false); // still case-sensitive
+});
+
+test('comparing text with a number is still never equal', () => {
+  const ctx = { vars: {}, indicators: {} };
+  assert.equal(evalExpr("'1' = 1", ctx), false);
+  assert.equal(evalExpr('1 = 1', ctx), true);
+});

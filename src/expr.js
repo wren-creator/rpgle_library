@@ -78,6 +78,18 @@ function tokenize(src) {
   return tokens;
 }
 
+// RPG compares character data as if both sides were blank-padded, so a
+// 20-character field holding BOB equals 'BOB'. Trailing blanks never matter.
+function valuesEqual(a, b) {
+  if (typeof a === 'string' && typeof b === 'string') return a.trimEnd() === b.trimEnd();
+  return a === b;
+}
+
+function valueLess(a, b) {
+  if (typeof a === 'string' && typeof b === 'string') return a.trimEnd() < b.trimEnd();
+  return a < b;
+}
+
 class Parser {
   constructor(tokens, ctx) {
     this.tokens = tokens;
@@ -125,12 +137,12 @@ class Parser {
       this.next();
       const right = this.parseAdditive();
       switch (t.value) {
-        case '=': return left === right;
-        case '<>': return left !== right;
-        case '<': return left < right;
-        case '>': return left > right;
-        case '<=': return left <= right;
-        case '>=': return left >= right;
+        case '=': return valuesEqual(left, right);
+        case '<>': return !valuesEqual(left, right);
+        case '<': return valueLess(left, right);
+        case '>': return valueLess(right, left);
+        case '<=': return !valueLess(right, left);
+        case '>=': return !valueLess(left, right);
       }
     }
     return left;
