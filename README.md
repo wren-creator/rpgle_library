@@ -56,6 +56,10 @@ The honest pitch: run, test and port RPG logic anywhere, not replace IBM i. Syst
 | Printer files and edit codes | no | no | yes |
 | Built-in functions beyond `%TRIM`, `%LEN`, `%SUBST` | no | no | yes |
 
+### Python versions
+
+The Python port **requires Python 3.12 or newer** and is **tested on 3.12, 3.13 and 3.14**: the same test suite runs on all three in CI. Version 1.1.0. The JS port declares Node 16 or newer in `package.json` and CI tests it on Node 22 and 24; the Go module declares Go 1.21 and CI tests it there.
+
 ### Port parity: known differences
 
 `docs/PUBLISHING.md` says the three ports should behave identically for any input all three support. That is **no longer fully true**. While building the Python runtime, these behaviors were corrected in Python only, and the JS and Go ports still have the old behavior:
@@ -251,7 +255,20 @@ Goal: run and test RPG IV logic on Linux, macOS or Windows, with no IBM i licens
   - [x] 4c. `CALL` between programs: same-folder lookup, `dcl-pr extpgm` and `CALL`/`PARM`/`PLIST`/`*ENTRY`, retained state when `*INLR` is off
   - [x] 4d. `PRINTER` files: externally described, page layout, overflow, edit codes, spool output
 
-- [ ] **5. Port parity.** Bring the behavior fixes above to the JS and Go ports, then decide which of the Python runtime features are worth porting
+- [ ] **5. Port parity.** Bring JS and Go up to the Python port. See "Coming to the JS and Go ports" below
+
+### Coming to the JS and Go ports
+
+The Python port is the reference. These are planned for the JS and Go ports, roughly in this order, with nothing promised by a date:
+
+1. **The behavior fixes**, so all three agree again: blank-insensitive character comparison, errors instead of `NaN` for text arithmetic, decimals shown on screen, case-insensitive `EXFMT` names, and errors instead of silent skips for fixed-form `DIM` and O-specs. This one comes first, because it restores the "all three behave the same" promise in `docs/PUBLISHING.md`.
+2. **The built-in functions** beyond `%TRIM`, `%LEN` and `%SUBST` (about twenty more), and `NOT`, `*BLANKS`/`*ZEROS` and the overflow indicators in the expression language.
+3. **DISK files**, with the same keyed-access model (`CHAIN`, `SETLL`, `READ`, `READE`, `WRITE`, `UPDATE`, `DELETE`) on SQLite, which means choosing a database library for each language.
+4. **Free-form RPG** (`**FREE`): declarations, loops, procedures, data structures and arrays.
+5. **`/COPY` includes**, **calls between programs**, and **printer files**.
+6. **A command line**, so `rpgle run` works the same from each port.
+
+Until a feature is listed as done for a port in "Status by language", it is Python only. Porting a feature means porting its tests too: the Python suite is the specification.
 
 This will not be a drop-in replacement for the IBM compiler. System APIs, CL, data areas, job and spool behavior, and ILE binding are out of scope. The pitch is run, test and port RPG logic anywhere, not replace IBM i.
 
