@@ -331,6 +331,19 @@ func assign(vars map[string]*Var, indicators map[string]bool, lvalue string, rva
 	return nil
 }
 
+// findFormat looks a record format up by name, ignoring case.
+func findFormat(dds *DDS, name string) (*Format, bool) {
+	if f, ok := dds.Formats[name]; ok {
+		return f, true
+	}
+	for key, f := range dds.Formats {
+		if strings.EqualFold(key, name) {
+			return f, true
+		}
+	}
+	return nil, false
+}
+
 // formatFieldText is a field's display text. Numeric fields are zero-filled
 // to their length. With decimals the decimal point is written out (so the
 // field is one column wider than a real 5250 would draw it, which shows bare
@@ -616,7 +629,8 @@ func (r *Runner) execute(prog *Program, dds *DDS) {
 			pc++
 
 		case "EXFMT":
-			format, ok := dds.Formats[in.Format]
+			// RPG is case-insensitive: EXFMT main finds the format DDS calls MAIN.
+			format, ok := findFormat(dds, in.Format)
 			if !ok {
 				r.doneCh <- fmt.Errorf("unknown DDS record format: %s", in.Format)
 				return
@@ -624,7 +638,7 @@ func (r *Runner) execute(prog *Program, dds *DDS) {
 			rr := RenderFormat(format, vars, indicators)
 
 			r.screenCh <- ScreenData{
-				FormatName: in.Format,
+				FormatName: format.Name,
 				Fields:     rr.Fields,
 				Cursor:     rr.Cursor,
 				Keys:       format.Keys,

@@ -352,12 +352,15 @@ function* runProgram(rpgAst, ddsFormats) {
         break;
 
       case 'EXFMT': {
-        currentFormat = ddsFormats.formats[instr.format];
+        // RPG is case-insensitive: EXFMT main finds the format DDS calls MAIN.
+        const wanted = instr.format.toUpperCase();
+        const formatKey = Object.keys(ddsFormats.formats).find((k) => k.toUpperCase() === wanted);
+        currentFormat = formatKey === undefined ? undefined : ddsFormats.formats[formatKey];
         if (!currentFormat) throw new Error(`Unknown DDS record format: ${instr.format}`);
         const rendered = renderFormat(currentFormat, vars, indicators);
         currentInputMap = rendered.inputMap;
         const resume = yield {
-          formatName: instr.format, fields: rendered.fields, cursor: rendered.cursor,
+          formatName: currentFormat.name, fields: rendered.fields, cursor: rendered.cursor,
           keys: currentFormat.keys, inputMap: rendered.inputMap,
         };
 

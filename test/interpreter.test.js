@@ -144,3 +144,21 @@ test('a numeric field with decimals shows its decimal point', () => {
   assert.equal(show(42, 0, 5), '00042');
   assert.equal(show(-5, 0, 5), '-0005');
 });
+
+// RPG is case-insensitive, so EXFMT main finds the format DDS calls MAIN, and
+// the screen reports the DDS's own spelling. (Parity with the Python port.)
+test('EXFMT format names are case-insensitive', () => {
+  const dds = parseDds("     A          R RESULT\n     A                                  1  2'HELLO'\n");
+  for (const written of ['RESULT', 'result', 'Result']) {
+    const rpg = parseRpgle(`     FRESULT    CF   E             WORKSTN\n     C                   EXFMT     ${written}\n`);
+    const screen = runProgram(rpg, dds).next().value;
+    assert.equal(screen.formatName, 'RESULT', `EXFMT ${written}`);
+    assert.equal(screen.fields[0].text, 'HELLO');
+  }
+});
+
+test('EXFMT of a format that does not exist is still an error', () => {
+  const dds = parseDds("     A          R RESULT\n     A                                  1  2'HELLO'\n");
+  const rpg = parseRpgle('     FRESULT    CF   E             WORKSTN\n     C                   EXFMT     nosuch\n');
+  assert.throws(() => runProgram(rpg, dds).next(), /Unknown DDS record format: nosuch/);
+});

@@ -242,3 +242,36 @@ func TestNumericFieldWithDecimalsShowsItsDecimalPoint(t *testing.T) {
 		t.Errorf("round trip of 48.75 = %v, %v", f, err)
 	}
 }
+
+// RPG is case-insensitive, so EXFMT main finds the format DDS calls MAIN, and
+// the screen reports the DDS's own spelling. (Parity with the Python port.)
+func TestExfmtFormatNamesAreCaseInsensitive(t *testing.T) {
+	dds, err := rpgle.ParseDDS("     A          R RESULT\n     A                                  1  2'HELLO'\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, written := range []string{"RESULT", "result", "Result"} {
+		prog, err := rpgle.ParseRPGLE("     FRESULT    CF   E             WORKSTN\n     C                   EXFMT     " + written + "\n")
+		if err != nil {
+			t.Fatal(err)
+		}
+		screen, _, err := rpgle.Run(prog, dds).Next(nil)
+		if err != nil {
+			t.Fatalf("EXFMT %s: %v", written, err)
+		}
+		if screen.FormatName != "RESULT" {
+			t.Errorf("EXFMT %s: FormatName = %q, want the DDS's own spelling RESULT", written, screen.FormatName)
+		}
+		if screen.Fields[0].Text != "HELLO" {
+			t.Errorf("EXFMT %s: first field = %q", written, screen.Fields[0].Text)
+		}
+	}
+}
+
+func TestExfmtOfAFormatThatDoesNotExistIsStillAnError(t *testing.T) {
+	dds, _ := rpgle.ParseDDS("     A          R RESULT\n     A                                  1  2'HELLO'\n")
+	prog, _ := rpgle.ParseRPGLE("     FRESULT    CF   E             WORKSTN\n     C                   EXFMT     nosuch\n")
+	if _, _, err := rpgle.Run(prog, dds).Next(nil); err == nil || !strings.Contains(err.Error(), "unknown DDS record format: nosuch") {
+		t.Errorf("want an unknown-format error, got %v", err)
+	}
+}
