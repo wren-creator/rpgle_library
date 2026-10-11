@@ -29,8 +29,9 @@
 'use strict';
 
 const { evalExpr, splitAssignment, toNumber, pow10, asString } = require('./expr');
+const { FileRuntime, FILE_OPS } = require('./fileops');
 
-function buildVars(rpgAst, ddsFormats) {
+function buildVars(rpgAst, ddsFormats, pfs) {
   const vars = {};
 
   // DDS-bound fields: every named field across every record format of
@@ -48,6 +49,21 @@ function buildVars(rpgAst, ddsFormats) {
       } else {
         vars[key] = { type: 'N', length: f.length, dec: f.dec || 0, value: 0 };
       }
+    }
+  }
+
+  // DISK file fields: each externally described file's record format, after
+  // the display fields (first definition wins). pfs is keyed by upper-case
+  // file name.
+  for (const fs of rpgAst.files || []) {
+    const pf = (pfs || {})[fs.name.toUpperCase()];
+    if (!pf || (fs.device || '').toUpperCase() !== 'DISK') continue;
+    for (const f of pf.fields) {
+      const key = f.name.toLowerCase();
+      if (vars[key]) continue;
+      vars[key] = f.dtype === 'A'
+        ? { type: 'A', length: f.length, dec: 0, value: ''.padEnd(f.length, ' ') }
+        : { type: 'N', length: f.length, dec: f.dec, value: 0 };
     }
   }
 
@@ -72,11 +88,18 @@ function buildVars(rpgAst, ddsFormats) {
 function compile(statements) {
   const instrs = [];
   const subroutines = {};
+  const klists = {};
+  let currentKlist = null;
   const ifStack = [];
   const dowStack = [];
   const selStack = [];
 
   for (const stmt of statements) {
+    const start = instrs.length;
+    const cond = parseCond(stmt.indic);
+    if (cond && NO_COND_OPS.has(stmt.op)) {
+      throw new Error(`Conditioning indicators on ${stmt.op} are not supported`);
+    }
     switch (stmt.op) {
       case 'EVAL':
         instrs.push({ op: 'EVAL', expr: stmt.expr });
@@ -189,9 +212,27 @@ function compile(statements) {
         instrs.push({ op: 'RETURN' });
         break;
 
+      case 'KLIST':
+        currentKlist = (stmt.factor1 || '').toUpperCase();
+        klists[currentKlist] = [];
+        break;
+
+      case 'KFLD':
+        if (currentKlist === null) throw new Error('KFLD with no KLIST before it');
+        klists[currentKlist].push(stmt.result);
+        break;
+
       default:
+        if (FILE_OPS.has(stmt.op)) {
+          instrs.push({
+            op: stmt.op, factor1: stmt.factor1, factor2: stmt.factor2,
+            indHi: stmt.indHi, indLo: stmt.indLo, indEq: stmt.indEq,
+          });
+          break;
+        }
         throw new Error(`Unsupported RPG opcode: ${stmt.op}`);
     }
+    for (const ins of instrs.slice(start)) ins.cond = cond;
   }
 
   // A block left open has jump targets that were never filled in; running it
@@ -199,7 +240,22 @@ function compile(statements) {
   if (ifStack.length > 0) throw new Error('IF with no ENDIF');
   if (dowStack.length > 0) throw new Error('DOW loop with no ENDDO');
   if (selStack.length > 0) throw new Error('SELECT with no ENDSL');
-  return { instrs, subroutines };
+  return { instrs, subroutines, klists };
+}
+
+// Ops that expand into jumps, so skipping one on a condition would
+// desynchronize the jump targets. Real RPG allows conditioning these; here
+// it's rejected loudly rather than run wrong.
+const NO_COND_OPS = new Set([
+  'IF', 'ELSE', 'ENDIF', 'DOW', 'ENDDO', 'SELECT', 'WHEN', 'OTHER', 'ENDSL', 'BEGSR', 'ENDSR', 'KLIST', 'KFLD',
+]);
+
+// Columns 9-11: an indicator that must be on, or N and one that must be off.
+function parseCond(raw) {
+  if (!raw) return null;
+  const m = /^(N?)(\d\d|LR)$/i.exec(raw);
+  if (!m) throw new Error(`Unsupported conditioning indicator: '${raw}'`);
+  return { negated: m[1] !== '', num: m[2].toUpperCase() };
 }
 
 function readValue(vars, name) {
@@ -291,10 +347,15 @@ function renderFormat(format, vars, indicators) {
 // the format's own CFnn/CAnn-declared keys) and values is
 // { fieldName: typedText } for every input field on the format just
 // shown.
-function* runProgram(rpgAst, ddsFormats) {
-  const vars = buildVars(rpgAst, ddsFormats);
+//
+// DISK files need options.db (a Database from database.js) and options.pfs
+// (physical file definitions from parsePf, keyed by upper-case file name).
+function* runProgram(rpgAst, ddsFormats, options = {}) {
+  const vars = buildVars(rpgAst, ddsFormats, options.pfs);
   const indicators = {};
-  const { instrs, subroutines } = compile(rpgAst.statements);
+  const { instrs, subroutines, klists } = compile(rpgAst.statements);
+  const files = new FileRuntime(rpgAst, options.db, options.pfs, klists);
+  const ctx = { vars, indicators, fileStatus: (kind, name) => files.status(kind, name) };
   const callStack = [];
   let pc = 0;
   let lastDiv = { quotient: 0, remainder: 0 };
@@ -303,6 +364,12 @@ function* runProgram(rpgAst, ddsFormats) {
 
   while (pc < instrs.length) {
     const instr = instrs[pc];
+
+    if (instr.cond) {
+      // Skipped unless the indicator is in the state the line asks for.
+      if (Boolean(indicators[instr.cond.num]) === instr.cond.negated) { pc++; continue; }
+    }
+
     switch (instr.op) {
       case 'NOP':
         pc++;
@@ -314,7 +381,7 @@ function* runProgram(rpgAst, ddsFormats) {
 
       case 'EVAL': {
         const { lvalue, rvalueSrc } = splitAssignment(instr.expr);
-        const rvalue = evalExpr(rvalueSrc, { vars, indicators });
+        const rvalue = evalExpr(rvalueSrc, ctx);
         assign(vars, indicators, lvalue, rvalue);
         pc++;
         break;
@@ -322,7 +389,7 @@ function* runProgram(rpgAst, ddsFormats) {
 
       case 'IF':
       case 'WHEN': {
-        const cond = evalExpr(instr.expr, { vars, indicators });
+        const cond = evalExpr(instr.expr, ctx);
         pc = cond ? pc + 1 : instr.falseTarget;
         break;
       }
@@ -334,7 +401,7 @@ function* runProgram(rpgAst, ddsFormats) {
         break;
 
       case 'DOW': {
-        const cond = evalExpr(instr.expr, { vars, indicators });
+        const cond = evalExpr(instr.expr, ctx);
         pc = cond ? pc + 1 : instr.falseTarget;
         break;
       }
@@ -409,6 +476,16 @@ function* runProgram(rpgAst, ddsFormats) {
         return;
 
       default:
+        if (FILE_OPS.has(instr.op)) {
+          files.exec(
+            instr, vars,
+            (name, value) => assign(vars, indicators, name, value),
+            (num, on) => { indicators[num] = on; },
+            (src) => evalExpr(src, ctx),
+          );
+          pc++;
+          break;
+        }
         throw new Error(`Unimplemented RPG instruction: ${instr.op}`);
     }
   }

@@ -1,7 +1,7 @@
 {
   "name": "rpgle_library",
   "version": "1.0.0",
-  "description": "A zero-dependency RPG IV (RPGLE) and DDS parser/interpreter for Node.js.",
+  "description": "An RPG IV (RPGLE) and DDS parser/interpreter for Node.js. No required dependencies; DISK files need the optional better-sqlite3.",
   "main": "src/index.js",
   "exports": {
     ".": "./src/index.js",
@@ -52,5 +52,16 @@
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/"
+  },
+  "peerDependencies": {
+    "better-sqlite3": ">=11.0.0"
+  },
+  "peerDependenciesMeta": {
+    "better-sqlite3": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "better-sqlite3": "^12.11.1"
   }
 }

@@ -396,7 +396,24 @@ class Parser {
     throw new Error(`Unsupported RPG figurative constant: ${name}`);
   }
 
+  // %EOF, %FOUND, %EQUAL: the argument is a file name, not an expression,
+  // and may be left off to mean the last file used.
+  parseFileStatus(name) {
+    let fname = null;
+    const t = this.peek();
+    if (t && t.type === 'op' && t.value === '(') {
+      this.next();
+      const nt = this.next();
+      if (!nt || nt.type !== 'name') throw new Error(`${name} takes a file name`);
+      fname = nt.value;
+      this.expectOp(')');
+    }
+    if (!this.ctx.fileStatus) throw new Error(`${name} used but the program has no DISK files`);
+    return this.ctx.fileStatus(name.slice(1).toLowerCase(), fname);
+  }
+
   parseFuncCall(name) {
+    if (name === '%EOF' || name === '%FOUND' || name === '%EQUAL') return this.parseFileStatus(name);
     const fn = BIFS[name];
     if (!fn) throw new Error(`Unsupported RPG built-in: ${name}`);
     this.expectOp('(');
@@ -432,6 +449,29 @@ function evalExpr(src, ctx) {
   return v;
 }
 
+// Splits text on sep, ignoring any sep inside quotes or parentheses:
+// splitTop("a : f(b:c) : 'x:y'", ':') is three parts.
+function splitTop(text, sep) {
+  const parts = [];
+  let depth = 0, cur = '', i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    if (c === "'") {
+      let j = i + 1;
+      while (j < text.length && text[j] !== "'") j++;
+      cur += text.slice(i, j + 1);
+      i = j + 1;
+      continue;
+    }
+    if (c === '(') depth++;
+    else if (c === ')') depth--;
+    if (c === sep && depth === 0) { parts.push(cur.trim()); cur = ''; } else cur += c;
+    i++;
+  }
+  parts.push(cur.trim());
+  return parts;
+}
+
 // Splits an EVAL statement's extended-factor-2 text into its lvalue
 // name and rvalue expression source, on the first top-level '='.
 // RPG EVAL statements never nest a bare assignment inside the
@@ -442,4 +482,4 @@ function splitAssignment(src) {
   return { lvalue: src.slice(0, eq).trim(), rvalueSrc: src.slice(eq + 1).trim() };
 }
 
-module.exports = { evalExpr, splitAssignment, toNumber, pow10, asString };
+module.exports = { evalExpr, splitAssignment, splitTop, toNumber, pow10, asString };

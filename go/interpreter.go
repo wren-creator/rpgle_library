@@ -40,6 +40,13 @@ type Var struct {
 // order wins on a name collision), plus D-spec standalone fields
 // (definition type 'S' only).
 func BuildVars(prog *Program, dds *DDS) map[string]*Var {
+	return BuildVarsWith(prog, dds, nil)
+}
+
+// BuildVarsWith is BuildVars for a program with DISK files: after the display
+// fields, every field of each DISK file's record format becomes a variable too
+// (pfs is keyed by upper-case file name).
+func BuildVarsWith(prog *Program, dds *DDS, pfs map[string]*PhysicalFile) map[string]*Var {
 	vars := map[string]*Var{}
 
 	for _, fmtName := range dds.FormatOrder {
@@ -60,6 +67,24 @@ func BuildVars(prog *Program, dds *DDS) map[string]*Var {
 					dec = *f.Dec
 				}
 				vars[key] = &Var{Type: 'N', Length: f.Length, Dec: dec, Value: NumberValue(0)}
+			}
+		}
+	}
+
+	for _, fs := range prog.Files {
+		pf := pfs[strings.ToUpper(fs.Name)]
+		if pf == nil || !strings.EqualFold(fs.Device, "DISK") {
+			continue
+		}
+		for _, f := range pf.Fields {
+			key := strings.ToLower(f.Name)
+			if _, exists := vars[key]; exists {
+				continue
+			}
+			if f.DType == "A" {
+				vars[key] = &Var{Type: 'A', Length: f.Length, Value: StringValue(strings.Repeat(" ", f.Length))}
+			} else {
+				vars[key] = &Var{Type: 'N', Length: f.Length, Dec: f.Dec, Value: NumberValue(0)}
 			}
 		}
 	}
@@ -103,13 +128,48 @@ type instr struct {
 	Format      string // EXFMT: record format name
 	Factor1     string // DIV: factor1
 	Factor2     string // DIV: factor2
-	Result      string // DIV/MVR: result field name
+	Result      string // DIV/MVR: result field name, KFLD: key field name
+
+	// Conditioning indicator (columns 9-11): the op runs only when the
+	// indicator is in the state the line asks for. Nil means always.
+	Cond *indCond
+	// Resulting indicators (columns 71-76) of the file opcodes.
+	IndHi, IndLo, IndEq string
+}
+
+type indCond struct {
+	negated bool
+	num     string
+}
+
+// noCondOps expand into jumps, so skipping one on a condition would
+// desynchronize the jump targets. Real RPG allows conditioning these; here
+// it's rejected loudly rather than run wrong.
+var noCondOps = map[string]bool{
+	"IF": true, "ELSE": true, "ENDIF": true, "DOW": true, "ENDDO": true, "SELECT": true,
+	"WHEN": true, "OTHER": true, "ENDSL": true, "BEGSR": true, "ENDSR": true, "KLIST": true, "KFLD": true,
+}
+
+var condRe = regexp.MustCompile(`(?i)^(N?)(\d\d|LR)$`)
+
+// parseCond reads columns 9-11: an indicator that must be on, or N and one
+// that must be off.
+func parseCond(raw string) (*indCond, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	m := condRe.FindStringSubmatch(raw)
+	if m == nil {
+		return nil, fmt.Errorf("unsupported conditioning indicator: '%s'", raw)
+	}
+	return &indCond{negated: m[1] != "", num: strings.ToUpper(m[2])}, nil
 }
 
 // Compiled is a jump-resolved instruction array plus subroutine entry points.
 type Compiled struct {
 	Instrs      []instr
 	Subroutines map[string]int
+	Klists      map[string][]string // KLIST name -> its KFLD field names
 }
 
 // Compile compiles a flat C-spec statement list into a jump-resolved
@@ -120,6 +180,9 @@ type Compiled struct {
 func Compile(statements []Statement) (*Compiled, error) {
 	var instrs []instr
 	subroutines := map[string]int{}
+	klists := map[string][]string{}
+	currentKlist := ""
+	inKlist := false
 
 	type ifFrame struct {
 		ifIndex      int
@@ -143,6 +206,14 @@ func Compile(statements []Statement) (*Compiled, error) {
 	var selStack []*selFrame
 
 	for _, stmt := range statements {
+		start := len(instrs)
+		cond, err := parseCond(stmt.Indic)
+		if err != nil {
+			return nil, err
+		}
+		if cond != nil && noCondOps[stmt.Op] {
+			return nil, fmt.Errorf("conditioning indicators on %s are not supported", stmt.Op)
+		}
 		switch stmt.Op {
 		case "EVAL":
 			instrs = append(instrs, instr{Op: "EVAL", Expr: stmt.Expr})
@@ -268,8 +339,27 @@ func Compile(statements []Statement) (*Compiled, error) {
 		case "RETURN":
 			instrs = append(instrs, instr{Op: "RETURN"})
 
+		case "KLIST":
+			currentKlist, inKlist = strings.ToUpper(stmt.Factor1), true
+			klists[currentKlist] = nil
+
+		case "KFLD":
+			if !inKlist {
+				return nil, errors.New("KFLD with no KLIST before it")
+			}
+			klists[currentKlist] = append(klists[currentKlist], stmt.Result)
+
+		case "CHAIN", "SETLL", "SETGT", "READ", "READE", "READP", "READPE", "WRITE", "UPDATE", "DELETE":
+			instrs = append(instrs, instr{
+				Op: stmt.Op, Factor1: stmt.Factor1, Factor2: stmt.Factor2,
+				IndHi: stmt.IndHi, IndLo: stmt.IndLo, IndEq: stmt.IndEq,
+			})
+
 		default:
 			return nil, fmt.Errorf("unsupported RPG opcode: %s", stmt.Op)
+		}
+		for i := start; i < len(instrs); i++ {
+			instrs[i].Cond = cond
 		}
 	}
 
@@ -284,7 +374,7 @@ func Compile(statements []Statement) (*Compiled, error) {
 	if len(selStack) > 0 {
 		return nil, errors.New("SELECT with no ENDSL")
 	}
-	return &Compiled{Instrs: instrs, Subroutines: subroutines}, nil
+	return &Compiled{Instrs: instrs, Subroutines: subroutines, Klists: klists}, nil
 }
 
 var numLitRe = regexp.MustCompile(`^-?\d+(\.\d+)?$`)
@@ -523,12 +613,26 @@ type Runner struct {
 // for driving it. Equivalent to calling runProgram(rpgAst, ddsFormats)
 // in the JS port and manually calling .next()/.next(resume) in a loop.
 func Run(prog *Program, dds *DDS) *Runner {
+	return RunWith(prog, dds, RunOptions{})
+}
+
+// RunOptions is what a program with DISK files needs besides its source.
+type RunOptions struct {
+	// DB opens the program's DISK files (see the sqlitedb package).
+	DB Database
+	// PFs holds the physical file definitions from ParsePF, keyed by
+	// upper-case file name.
+	PFs map[string]*PhysicalFile
+}
+
+// RunWith is Run for a program with DISK files.
+func RunWith(prog *Program, dds *DDS, opts RunOptions) *Runner {
 	r := &Runner{
 		screenCh: make(chan ScreenData),
 		resumeCh: make(chan Resume),
 		doneCh:   make(chan error, 1),
 	}
-	go r.execute(prog, dds)
+	go r.execute(prog, dds, opts)
 	return r
 }
 
@@ -548,14 +652,14 @@ func (r *Runner) Next(resume *Resume) (*ScreenData, bool, error) {
 	}
 }
 
-func (r *Runner) execute(prog *Program, dds *DDS) {
+func (r *Runner) execute(prog *Program, dds *DDS, opts RunOptions) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			r.doneCh <- fmt.Errorf("rpgle: %v", rec)
 		}
 	}()
 
-	vars := BuildVars(prog, dds)
+	vars := BuildVarsWith(prog, dds, opts.PFs)
 	indicators := map[string]bool{}
 	compiled, err := Compile(prog.Statements)
 	if err != nil {
@@ -564,6 +668,12 @@ func (r *Runner) execute(prog *Program, dds *DDS) {
 	}
 	instrs := compiled.Instrs
 	subroutines := compiled.Subroutines
+	files, err := newFileRuntime(prog, opts.DB, opts.PFs, compiled.Klists)
+	if err != nil {
+		r.doneCh <- err
+		return
+	}
+	ctx := &Context{Vars: vars, Indicators: indicators, FileStatus: files.status}
 
 	var callStack []int
 	pc := 0
@@ -571,6 +681,15 @@ func (r *Runner) execute(prog *Program, dds *DDS) {
 
 	for pc < len(instrs) {
 		in := instrs[pc]
+
+		if in.Cond != nil {
+			// Skipped unless the indicator is in the state the line asks for.
+			if indicators[in.Cond.num] == in.Cond.negated {
+				pc++
+				continue
+			}
+		}
+
 		switch in.Op {
 		case "NOP":
 			pc++
@@ -589,7 +708,7 @@ func (r *Runner) execute(prog *Program, dds *DDS) {
 				r.doneCh <- err
 				return
 			}
-			rvalue, err := EvalExpr(rvalueSrc, &Context{Vars: vars, Indicators: indicators})
+			rvalue, err := EvalExpr(rvalueSrc, ctx)
 			if err != nil {
 				r.doneCh <- err
 				return
@@ -601,7 +720,7 @@ func (r *Runner) execute(prog *Program, dds *DDS) {
 			pc++
 
 		case "IF", "WHEN":
-			cond, err := EvalExpr(in.Expr, &Context{Vars: vars, Indicators: indicators})
+			cond, err := EvalExpr(in.Expr, ctx)
 			if err != nil {
 				r.doneCh <- err
 				return
@@ -619,7 +738,7 @@ func (r *Runner) execute(prog *Program, dds *DDS) {
 			pc = in.Target
 
 		case "DOW":
-			cond, err := EvalExpr(in.Expr, &Context{Vars: vars, Indicators: indicators})
+			cond, err := EvalExpr(in.Expr, ctx)
 			if err != nil {
 				r.doneCh <- err
 				return
@@ -735,6 +854,18 @@ func (r *Runner) execute(prog *Program, dds *DDS) {
 		case "RETURN":
 			r.doneCh <- nil
 			return
+
+		case "CHAIN", "SETLL", "SETGT", "READ", "READE", "READP", "READPE", "WRITE", "UPDATE", "DELETE":
+			err := files.exec(&in, vars,
+				func(name string, v Value) error { return assign(vars, indicators, name, v) },
+				func(num string, on bool) { indicators[num] = on },
+				func(src string) (Value, error) { return EvalExpr(src, ctx) },
+			)
+			if err != nil {
+				r.doneCh <- err
+				return
+			}
+			pc++
 
 		default:
 			r.doneCh <- fmt.Errorf("unimplemented RPG instruction: %s", in.Op)

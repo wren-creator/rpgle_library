@@ -170,6 +170,10 @@ func valueLess(a, b Value) bool {
 type Context struct {
 	Vars       map[string]*Var
 	Indicators map[string]bool
+	// FileStatus answers %EOF, %FOUND and %EQUAL: kind is "eof", "found" or
+	// "equal", and name is the file name, or "" for the last file used.
+	// Nil when the program has no DISK files.
+	FileStatus func(kind, name string) (bool, error)
 }
 
 type tokenType int
@@ -553,7 +557,32 @@ func (p *exprParser) resolveIndicatorOrConst(name string) (Value, error) {
 	return Value{}, fmt.Errorf("unsupported RPG figurative constant: %s", name)
 }
 
+// parseFileStatus handles %EOF, %FOUND and %EQUAL: the argument is a file
+// name, not an expression, and may be left off to mean the last file used.
+func (p *exprParser) parseFileStatus(name string) (Value, error) {
+	fname := ""
+	if t := p.peek(); t != nil && t.typ == tokOp && t.str == "(" {
+		p.next()
+		nt := p.next()
+		if nt == nil || nt.typ != tokName {
+			return Value{}, fmt.Errorf("%s takes a file name", name)
+		}
+		fname = nt.str
+		if err := p.expectOp(")"); err != nil {
+			return Value{}, err
+		}
+	}
+	if p.ctx.FileStatus == nil {
+		return Value{}, fmt.Errorf("%s used but the program has no DISK files", name)
+	}
+	on, err := p.ctx.FileStatus(strings.ToLower(name[1:]), fname)
+	return BoolValue(on), err
+}
+
 func (p *exprParser) parseFuncCall(name string) (Value, error) {
+	if name == "%EOF" || name == "%FOUND" || name == "%EQUAL" {
+		return p.parseFileStatus(name)
+	}
 	fn, ok := bifs[name]
 	if !ok {
 		return Value{}, fmt.Errorf("unsupported RPG built-in: %s", name)
@@ -633,4 +662,38 @@ func SplitAssignment(src string) (lvalue, rvalueSrc string, err error) {
 		return "", "", fmt.Errorf("EVAL statement missing '=': %q", src)
 	}
 	return strings.TrimSpace(src[:eq]), strings.TrimSpace(src[eq+1:]), nil
+}
+
+// SplitTop splits text on sep, ignoring any sep inside quotes or
+// parentheses: SplitTop("a : f(b:c) : 'x:y'", ':') is three parts.
+func SplitTop(text string, sep byte) []string {
+	var parts []string
+	depth := 0
+	var cur strings.Builder
+	for i := 0; i < len(text); {
+		c := text[i]
+		if c == '\'' {
+			j := i + 1
+			for j < len(text) && text[j] != '\'' {
+				j++
+			}
+			end := min(j+1, len(text))
+			cur.WriteString(text[i:end])
+			i = end
+			continue
+		}
+		if c == '(' {
+			depth++
+		} else if c == ')' {
+			depth--
+		}
+		if c == sep && depth == 0 {
+			parts = append(parts, strings.TrimSpace(cur.String()))
+			cur.Reset()
+		} else {
+			cur.WriteByte(c)
+		}
+		i++
+	}
+	return append(parts, strings.TrimSpace(cur.String()))
 }

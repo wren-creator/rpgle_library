@@ -16,6 +16,8 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
+      # better-sqlite3 (a dev dependency) is what the DISK file tests run on.
+      - run: npm ci
       - run: npm test
 
   go-test:
@@ -55,6 +57,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+      - run: npm ci
       - uses: actions/setup-go@v7
         with:
           go-version: '1.21'

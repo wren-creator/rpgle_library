@@ -21,11 +21,15 @@
 const { parseDds } = require('./dds');
 const { parseRpgle } = require('./rpgle');
 const { evalExpr, splitAssignment } = require('./expr');
+const { parsePf } = require('./pf');
+const { Database } = require('./database');
 const { runProgram, buildVars, compile, renderFormat } = require('./interpreter');
 
 module.exports = {
   parseDds,
   parseRpgle,
+  parsePf,
+  Database,
   evalExpr,
   splitAssignment,
   runProgram,
