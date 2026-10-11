@@ -66,3 +66,18 @@ def dspec(name, length, dec=None, init=None) -> str:
     if init is not None:
         _put(b, 45, f"INZ({init})")
     return "".join(b).rstrip()
+
+
+def pdds_line(kind="", name="", length="", dtype="", dec="", line="", pos="", keywords="", ind="") -> str:
+    """One printer DDS line: line is 7 for page line 7, '+1' for relative, '' for same line."""
+    b = [" "] * 5 + ["A"]
+    _put(b, 8, ind)
+    _put(b, 17, kind)
+    _put(b, 19, name)
+    _put(b, 30, str(length).rjust(5) if length != "" else "")
+    _put(b, 35, dtype)
+    _put(b, 36, str(dec).rjust(2) if dec != "" else "")
+    _put(b, 39, str(line).rjust(3) if line != "" else "")
+    _put(b, 42, str(pos).rjust(3) if pos != "" else "")
+    _put(b, 45, keywords)
+    return "".join(b).rstrip()

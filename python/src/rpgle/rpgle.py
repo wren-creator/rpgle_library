@@ -49,6 +49,7 @@ class FileSpec:
     device: Optional[str] = None
     addition: Optional[str] = None  # 'A' = records may be added
     keyed: bool = False  # K in column 34 (the PF's DDS key is what actually orders access)
+    oflind: Optional[str] = None  # a printer file's overflow indicator: *INOF, *IN90, or an ind variable
 
 
 @dataclass
@@ -196,6 +197,11 @@ def parse_rpgle(
         raise RpgleError(remap_error(str(e), origin)) from None
 
 
+def _oflind(keywords: str) -> Optional[str]:
+    m = re.search(r"\bOFLIND\s*\(\s*([^)\s]+)\s*\)", keywords, re.IGNORECASE)
+    return m.group(1) if m else None
+
+
 def _parse(source: str) -> Program:
     from .freeform import is_free, parse_free  # local: freeform imports this module
 
@@ -212,6 +218,12 @@ def _parse(source: str) -> Program:
         if spec_type == "*":
             continue  # comment line
 
+        if spec_type == "O":
+            raise RpgleError(
+                "output specifications (O-specs) are not supported: print with an externally described "
+                "printer file (an F-spec with E in column 22, a .prtf DDS, and WRITE)"
+            )
+
         if spec_type == "F":
             fs = FileSpec(
                 name=col(line, 7, 16),
@@ -221,6 +233,7 @@ def _parse(source: str) -> Program:
                 device=col(line, 36, 42),
                 addition=col(line, 20, 20) or None,
                 keyed=col(line, 34, 34).upper() == "K",
+                oflind=_oflind(line[43:] if len(line) > 43 else ""),
             )
             prog.files.append(fs)
             # prog.file stays "the WORKSTN file" (first one wins) so

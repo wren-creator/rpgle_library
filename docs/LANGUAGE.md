@@ -284,6 +284,57 @@ From Python, pass a `ProgramLoader`: `run_program(prog, dds, db, pfs, loader=Pro
 
 Not supported yet: `extproc` and service programs, `CALLB`, `extpgm` with a variable name, `*OMIT`, `%PARMS`, activation groups, and the called program's `return` value.
 
+## Printer Files
+
+*Python port only so far.* A program prints by declaring a printer file and writing record formats to it:
+
+```
+dcl-f custrpt printer oflind(*inof);          // fixed-form: FCUSTRPT O E PRINTER OFLIND(*INOF)
+
+write heading;
+dow not %eof(custmast);
+  if *inof;                                   // the overflow indicator came on...
+    write heading;                            // ...so start a new page (SKIPB(1) does that)
+    *inof = *off;
+  endif;
+  write detail;
+  read custmast;
+enddo;
+write total;
+```
+
+The layout comes from the file's DDS, `custrpt.prtf`, found beside the program (or in `--pf-dir` or an `-I` folder). Its fields become program variables, like any externally described file's. `WRITE` takes a record format; it's the only operation a printer file allows. `programs/custreport.rpgle` and `programs/custrpt.prtf` are a complete worked example. See [`DDS_REFERENCE.md`](./DDS_REFERENCE.md) for the DDS.
+
+**Where output goes.** Each printer file a program opens becomes one text "spool file". `rpgle run` shows them on stdout after the program ends, under a heading, with `----- page break -----` between pages; `--spool-dir DIR` writes `DIR/<file>.txt` instead, with a form feed (`\f`) on a line of its own between pages. A printer file that printed nothing produces no output. If a program and a program it calls open the same printer file, each gets its own spool file (`custrpt.txt`, `custrpt-2.txt`), as in real life.
+
+**The page model.** Each open printer file remembers the last line printed on the current page. To write a record:
+
+1. **Before.** `SKIPB(n)` goes to line n, starting a new page first if line n has been reached already. `SPACEB(n)` goes n lines down from the last line. With neither, the record starts on the next line.
+2. **Body.** Each field's line is absolute (`5` is page line 5), relative (`+1` is one below the previous field, or below the last line printed for the first field) or blank (the same line as the previous field). An **absolute line that has been reached already starts a new page**: print a record at line 5 twice and the second one lands on the next page, which is the classic printer-DDS surprise.
+3. **After.** `SKIPA(n)` or `SPACEA(n)` position the next record. The default is the next line.
+
+A record that doesn't fit on the rest of the page starts a new one; one taller than a whole page is an error. Fields written to the same place overlay each other.
+
+**Overflow.** When the last line printed in a record is at or past the overflow line, the file's `OFLIND` indicator turns on. It stays on until the program turns it off, which is why the loop above resets it right after printing its headings. `OFLIND` can name an indicator (`*INOF`, `*INOA` to `*INOG`, `*INOV`, `*IN90`) or an `ind` variable. Defaults match `CRTPRTF`: **66 lines to a page, overflow at line 60**; `--page-length` and `--overflow-line` change them, and the API takes the same two numbers (`Spool(page_length=..., overflow_line=...)`).
+
+**Numbers.** A numeric field with no edit code prints as zero-filled digits with no decimal point and no sign, as a real printer file would, and a negative value is therefore an error rather than a silently lost sign. Add `EDTCDE` for readable amounts:
+
+| Code | Commas | Sign | Zero prints as |
+|---|---|---|---|
+| `1` / `2` | yes | none | `0.00` / blanks |
+| `3` / `4` | no | none | `0.00` / blanks |
+| `A` / `B` | yes | `CR` after a negative | `0.00` / blanks |
+| `C` / `D` | no | `CR` after a negative | `0.00` / blanks |
+| `J` / `K` | yes | `-` after a negative | `0.00` / blanks |
+| `L` / `M` | no | `-` after a negative | `0.00` / blanks |
+| `Z` | no (and no decimal point) | none | blanks |
+
+An edited field is always the same width however big the value is, so columns line up. The width is the field's digits, plus commas, the decimal point, and room for the sign.
+
+`PAGNBR` on a numeric field makes it the page number, counting from 1 for each printer file opened.
+
+Not supported, and each is an error, never a silent blank: O-specs and program-described printer files (the old `FQPRINT O F 132 PRINTER` with output specifications), overprinting (`SPACEA(0)`), `DATE`, `TIME`, `USER` and `SYSNAME` fields, `EDTWRD`, edit codes `X`, `Y` and the others not in the table, an edit code's fill character, barcodes, and overlays. Keywords that only change appearance (`TEXT`, `COLHDG`, `DSPATR`, `FONT` and the like) are ignored. A program must be run with a spool: `rpgle run` provides one, and from Python pass `spool=Spool(directories=[...])` to `run_program`.
+
 ## DISK Files
 
 *Python port only so far.* A program with `DISK` F-specs runs against a `Database` (SQLite) and a dict of physical-file DDS, one per file:

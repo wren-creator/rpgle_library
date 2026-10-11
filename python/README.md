@@ -56,6 +56,8 @@ rpgle run programs/custinq.rpgle --db shop.db                          # custome
 
 `/COPY` members and CALLed programs are found next to the program and in any `-I folder`, and `-D NAME` defines a name for `/IF DEFINED(NAME)`.
 
+A program that prints shows its output after it ends (or `--spool-dir DIR` writes one `.txt` per printer file); `--page-length` and `--overflow-line` set the page (66 and 60 by default). Printer layouts are `<file>.prtf` DDS files beside the program.
+
 Programs with `DISK` files need `--db`, and each file's layout comes from `<filename>.pf` (physical-file DDS) next to the program, or in `--pf-dir`. `custinq.rpgle` is the worked example: a screen, a `CHAIN`, and the not-found indicator.
 
 Each `EXFMT` is drawn as a 24x80 grid, then it prompts for each input field (press Enter to keep the value shown). Type a function key like `F3` at any prompt to send that key, if the current format declares it. It reads plain stdin and writes plain stdout, so it works over SSH, in a pipe, and in CI. The program ends when the RPG does, or when input runs out.

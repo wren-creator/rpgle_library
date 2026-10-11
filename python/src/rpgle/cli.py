@@ -5,6 +5,7 @@ The `rpgle` command: run an RPG IV program from a terminal.
 
     rpgle run prog.rpgle [--dspf screen.dspf] [--db data.db] [--pf-dir DIR]
                          [-I includedir ...] [-D NAME ...]
+                         [--spool-dir DIR] [--page-length N] [--overflow-line N]
     rpgle load custmast.pf customers.csv --db data.db
 
 The library itself never touches a terminal; it yields plain screen
@@ -40,6 +41,7 @@ from .interpreter import Resume, ScreenData, run_program
 from .loader import ProgramLoader, load_pfs
 from .pf import PhysicalFile, parse_pf
 from .rpgle import parse_rpgle
+from .spool import FORM_FEED, Spool
 
 ROWS, COLS = 24, 80
 _FKEY = re.compile(r"^F(\d{1,2})$", re.IGNORECASE)
@@ -97,6 +99,7 @@ def drive(
     db: Optional[Database] = None,
     pfs: Optional[dict[str, PhysicalFile]] = None,
     loader: Optional[ProgramLoader] = None,
+    spool: Optional[Spool] = None,
 ) -> int:
     """Runs prog to completion against the given streams. Returns a
     process exit code: 0 when the program ends or input runs out.
@@ -105,7 +108,7 @@ def drive(
     def out(s: str = "") -> None:
         print(s, file=stdout)
 
-    gen = run_program(prog, dds, db, pfs, loader)
+    gen = run_program(prog, dds, db, pfs, loader, spool)
     try:
         return _drive_loop(gen, stdin, stdout, out)
     finally:
@@ -164,6 +167,26 @@ def _load_dds(rpg_path: pathlib.Path, dspf_arg: Optional[str]) -> DDS:
     return parse_dds("")
 
 
+def emit_spool(spool: Spool, spool_dir: Optional[str], stdout: TextIO) -> None:
+    """Shows what the program printed: as <name>.txt files in spool_dir, or,
+    with no directory, on stdout under a heading per printer file.
+    """
+    outputs = spool.outputs()
+    if spool_dir:
+        directory = pathlib.Path(spool_dir)
+        directory.mkdir(parents=True, exist_ok=True)
+        for name, text in outputs:
+            safe = re.sub(r"[^\w.-]", "_", name)
+            path = directory / f"{safe}.txt"
+            path.write_text(text)
+            print(f"Spool file written: {path}", file=stdout)
+        return
+    for name, text in outputs:
+        print(f"\n===== printer file {name.upper()} =====", file=stdout)
+        print(text.replace(FORM_FEED + "\n", "----- page break -----\n"), end="", file=stdout)
+        print(f"===== end of {name.upper()} =====", file=stdout)
+
+
 def load_csv(pf: PhysicalFile, db: Database, csv_path: pathlib.Path) -> int:
     """Appends every row of the CSV to the file. The header row must
     name every field of the record format (any order, any case).
@@ -200,6 +223,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     run.add_argument("--db", help="SQLite database holding the program's DISK files (required if it has any)")
     run.add_argument("--pf-dir", help="folder of <file>.pf DDS files (default: next to the program)")
     run.add_argument("-I", dest="include_dirs", action="append", default=[], metavar="DIR", help="folder to search for /COPY members and CALLed programs (repeatable)")
+    run.add_argument("--spool-dir", help="write each printer file's output to DIR/<file>.txt (default: show it after the program ends)")
+    run.add_argument("--page-length", type=int, default=66, help="lines per printed page (default 66)")
+    run.add_argument("--overflow-line", type=int, default=60, help="line at which a printer file's overflow indicator comes on (default 60)")
     run.add_argument("-D", dest="defines", action="append", default=[], metavar="NAME", help="define NAME for /IF DEFINED(NAME) (repeatable)")
     load = sub.add_parser("load", help="append a CSV file's rows to a DISK file")
     load.add_argument("pf", help="the file's physical-file DDS, e.g. custmast.pf (file name = its stem)")
@@ -239,7 +265,15 @@ def main(argv: Optional[list[str]] = None) -> int:
                 pf_dirs=[pf_dir],
                 main=rpg_path,
             )
-            return drive(prog, dds, sys.stdin, sys.stdout, db, pfs, loader)
+            spool = Spool(
+                directories=[rpg_path.parent, pf_dir, *include_dirs],
+                page_length=args.page_length,
+                overflow_line=args.overflow_line,
+            )
+            try:
+                return drive(prog, dds, sys.stdin, sys.stdout, db, pfs, loader, spool)
+            finally:
+                emit_spool(spool, args.spool_dir, sys.stdout)
         finally:
             if db is not None:
                 db.close()

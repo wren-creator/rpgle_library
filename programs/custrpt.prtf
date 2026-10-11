@@ -1,0 +1,20 @@
+     A* CUSTRPT.PRTF -- printer file for the customer balance report.
+     A* Columns 39-41 are the line, 42-44 the position. A blank line means
+     A* "the same line as the field before", so each record here is one line.
+
+     A          R HEADING                   SKIPB(1) SPACEA(2)
+     A                                  1  2'CUSTOMER BALANCES'
+     A                                  1 40'PAGE'
+     A            PAGE           3S 0O  1 45PAGNBR EDTCDE(Z)
+     A                                  2  2'NO.'
+     A                                     8'NAME'
+     A                                    32'BALANCE'
+
+     A          R DETAIL
+     A            CUSTNO         5S 0O     2EDTCDE(Z)
+     A            NAME          20A  O     8
+     A            BAL            9S 2O    28EDTCDE(J)
+
+     A          R TOTAL                     SPACEB(2)
+     A                                     8'TOTAL'
+     A            TOT            9S 2O    28EDTCDE(J)

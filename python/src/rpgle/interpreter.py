@@ -46,6 +46,8 @@ from .errors import RpgleError
 from .fileops import FILE_OPS, FileRuntime
 from .database import Database
 from .pf import PhysicalFile
+from .prtf import PrintFile
+from .spool import Spool
 from .expr import ArrayVar, Context, Var, as_bool, as_float, as_string, eval_call, eval_expr, resolve_target, split_assignment
 from .loader import CallError, LoadedProgram, ProgramLoader, program_key
 from .rpgle import DSpec, DsSpec, ParamSpec, ProcSpec, Program, ProtoSpec
@@ -139,7 +141,12 @@ def _new_var(d: DSpec) -> Any:
     return Var(type="N", length=d.length, dec=d.dec, value=float(d.init) if d.init is not None else 0.0)
 
 
-def build_vars(prog: Program, dds: DDS, pfs: Optional[dict[str, PhysicalFile]] = None) -> dict[str, Var]:
+def build_vars(
+    prog: Program,
+    dds: DDS,
+    pfs: Optional[dict[str, PhysicalFile]] = None,
+    prtfs: Optional[dict[str, PrintFile]] = None,
+) -> dict[str, Var]:
     """Builds the program's variable table: every named DDS field
     across every record format of the externally-described WORKSTN
     file becomes a program variable (first definition in source order
@@ -174,6 +181,20 @@ def build_vars(prog: Program, dds: DDS, pfs: Optional[dict[str, PhysicalFile]] =
                 variables[key] = Var(type="A", length=pff.length, dec=0, value=" " * pff.length)
             else:
                 variables[key] = Var(type="N", length=pff.length, dec=pff.dec, value=0.0)
+
+    for fs in prog.files:
+        defs = (prtfs or {}).get((fs.name or "").upper())
+        if defs is None or (fs.device or "").upper() != "PRINTER":
+            continue
+        for fmt in defs.formats.values():
+            for f in fmt.fields:
+                if f.kind != "field" or f.name.lower() in variables:
+                    continue
+                variables[f.name.lower()] = (
+                    Var(type="A", length=f.length, dec=0, value=" " * f.length)
+                    if f.dtype == "A"
+                    else Var(type="N", length=f.length, dec=f.dec, value=0.0)
+                )
 
     for d in prog.dspecs:
         if d.deftype != "S":
@@ -495,7 +516,7 @@ def compile_program(statements) -> Compiled:
 _NO_COND_OPS = frozenset(
     {"IF", "ELSE", "ELSEIF", "ENDIF", "DOW", "DOU", "FOR", "ENDDO", "ENDFOR", "SELECT", "WHEN", "OTHER", "ENDSL", "BEGSR", "ENDSR", "KLIST", "KFLD", "PLIST", "PARM"}
 )
-_COND_RE = re.compile(r"^(N?)(\d\d|LR)$", re.IGNORECASE)
+_COND_RE = re.compile(r"^(N?)(\d\d|LR|O[A-GV])$", re.IGNORECASE)
 
 
 def _parse_cond(raw: Optional[str]) -> Optional[tuple[bool, str]]:
@@ -508,7 +529,7 @@ def _parse_cond(raw: Optional[str]) -> Optional[tuple[bool, str]]:
 
 
 _NUM_LIT_RE = re.compile(r"^-?\d+(\.\d+)?$")
-_ASSIGN_IND_RE = re.compile(r"^\*IN(\d\d)$", re.IGNORECASE)
+_ASSIGN_IND_RE = re.compile(r"^\*IN(\d\d|O[A-GV])$", re.IGNORECASE)
 _ASSIGN_INLR_RE = re.compile(r"^\*INLR$", re.IGNORECASE)
 
 
@@ -528,7 +549,7 @@ def _numeric_operand(variables: dict[str, Var], operand: str) -> float:
 def _assign(variables: dict[str, Var], indicators: dict[str, bool], lvalue: str, rvalue: Any) -> None:
     m = _ASSIGN_IND_RE.match(lvalue)
     if m:
-        indicators[m.group(1)] = as_bool(rvalue)
+        indicators[m.group(1).upper()] = as_bool(rvalue)
         return
     if _ASSIGN_INLR_RE.match(lvalue):
         indicators["LR"] = as_bool(rvalue)
@@ -760,6 +781,7 @@ def run_program(
     db: Optional[Database] = None,
     pfs: Optional[dict[str, PhysicalFile]] = None,
     loader: Optional[ProgramLoader] = None,
+    spool: Optional[Spool] = None,
 ) -> Generator[ScreenData, Optional[Resume], None]:
     """Runs the program. Yields a ScreenData on every EXFMT; resume
     with .send(Resume(key, values)) where key is whatever function key
@@ -772,10 +794,12 @@ def run_program(
     committed when the program ends or the generator is closed.
 
     A program that calls other programs needs a loader
-    (loader.ProgramLoader), which finds them by name in its folders.
+    (loader.ProgramLoader), which finds them by name in its folders. A
+    program that prints needs a spool (spool.Spool), which collects the
+    output of every printer file; read it with spool.outputs().
     """
     try:
-        yield from _run_program(prog, dds, db, pfs, loader)
+        yield from _run_program(prog, dds, db, pfs, loader, spool)
     finally:
         if db is not None:
             db.commit()
@@ -860,9 +884,10 @@ class _Frame:
 class _Calls:
     """State shared by a program and every program it calls, directly or not."""
 
-    def __init__(self, loader: Optional[ProgramLoader], db: Optional[Database]):
+    def __init__(self, loader: Optional[ProgramLoader], db: Optional[Database], spool: Optional[Spool] = None):
         self.loader = loader
         self.db = db
+        self.spool = spool
         # Programs currently running, outermost first. RPG programs can't
         # call themselves, directly or through another program.
         self.active: list[str] = [loader.main_name] if loader is not None and loader.main_name else []
@@ -1192,6 +1217,7 @@ class _Runtime:
                     lambda num, on: indicators.__setitem__(num, on),
                     lambda src: eval_expr(src, ctx),
                     frame.ds_prefix,
+                    lambda num: indicators.get(num, False),
                 )
                 pc += 1
 
@@ -1261,10 +1287,11 @@ def _new_instance(loaded: LoadedProgram, calls: _Calls) -> _Instance:
     """Builds a program ready to run: its variables, files and procedures."""
     prog = loaded.prog
     try:
-        variables = build_vars(prog, loaded.dds, loaded.pfs)
+        prtfs = calls.spool.load_defs(prog, [loaded.path.parent]) if calls.spool is not None else {}
+        variables = build_vars(prog, loaded.dds, loaded.pfs, prtfs)
         indicators: dict[str, bool] = {}
         compiled = compile_program(prog.statements)
-        files = FileRuntime(prog, calls.db, loaded.pfs, compiled.klists)
+        files = FileRuntime(prog, calls.db, loaded.pfs, compiled.klists, spool=calls.spool, prtfs=prtfs)
         rt = _Runtime(
             prog, loaded.dds, loaded.pfs, variables, indicators, files, compile_procs(prog.procs),
             calls=calls, directory=loaded.path.parent,
@@ -1290,13 +1317,15 @@ def _run_program(
     db: Optional[Database],
     pfs: Optional[dict[str, PhysicalFile]],
     loader: Optional[ProgramLoader] = None,
+    spool: Optional[Spool] = None,
 ) -> Generator[ScreenData, Optional[Resume], None]:
-    variables = build_vars(prog, dds, pfs)
+    prtfs = spool.load_defs(prog) if spool is not None else {}
+    variables = build_vars(prog, dds, pfs, prtfs)
     indicators: dict[str, bool] = {}
     compiled = compile_program(prog.statements)
-    files = FileRuntime(prog, db, pfs, compiled.klists)
+    files = FileRuntime(prog, db, pfs, compiled.klists, spool=spool, prtfs=prtfs)
     rt = _Runtime(
         prog, dds, pfs, variables, indicators, files, compile_procs(prog.procs),
-        calls=_Calls(loader, db), directory=loader.dirs[0] if loader is not None and loader.dirs else None,
+        calls=_Calls(loader, db, spool), directory=loader.dirs[0] if loader is not None and loader.dirs else None,
     )
     yield from rt.exec(rt.main_frame(compiled))

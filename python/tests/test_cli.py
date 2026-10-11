@@ -143,6 +143,33 @@ class DiskCliTest(unittest.TestCase):
         self.assertIn("0000048.75", out)
         self.assertIn("Customer not found", out)
 
+    def test_a_report_prints_to_stdout_after_the_program_ends(self):
+        self._load()
+        code, out = self._main(["run", str(self.progs / "custreport.rpgle"), "--db", self.db, "--page-length", "6", "--overflow-line", "5"])
+        self.assertEqual(code, 0)
+        self.assertIn("===== printer file CUSTRPT =====", out)
+        self.assertIn("Alice Anderson", out)
+        self.assertIn("----- page break -----", out)
+        self.assertIn("11,298.74", out)  # 1,250.00 + 48.75 + 0 + 9,999.99
+
+    def test_spool_dir_writes_a_file_per_printer_file(self):
+        import os
+
+        self._load()
+        spool_dir = os.path.join(self._tmp.name, "spool")
+        code, out = self._main(["run", str(self.progs / "custreport.rpgle"), "--db", self.db, "--spool-dir", spool_dir])
+        self.assertEqual(code, 0)
+        self.assertIn("Spool file written", out)
+        text = pathlib.Path(spool_dir, "custrpt.txt").read_text()
+        self.assertIn("CUSTOMER BALANCES", text)
+        self.assertNotIn("===== printer file", out)  # written to a file instead of shown
+        self.assertEqual(text.count("\f"), 0)  # fits on one 66-line page
+
+    def test_a_bad_overflow_line_is_a_clean_error(self):
+        self._load()
+        code, _ = self._main(["run", str(self.progs / "custreport.rpgle"), "--db", self.db, "--page-length", "5", "--overflow-line", "9"])
+        self.assertEqual(code, 1)
+
     def test_not_found_shows_the_message(self):
         self._load()
         code, out = self._main(["run", str(self.progs / "custinq.rpgle"), "--db", self.db], "99\nF3\n")

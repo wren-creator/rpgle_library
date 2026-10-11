@@ -110,6 +110,27 @@ A DISK file's DDS describes one record format, its fields, and its key. The RPG 
 
 Not supported: `DESCEND` keys (rejected with an error), join and select/omit logical files, `REF`/`REFFLD`, `ALIAS`, more than one record format per file.
 
+## Printer Files (PRTF)
+
+*Python port only so far.* A printer file's DDS describes the record formats a program can `WRITE`. The column layout is the same as a display file's (see above); what differs is the line column and the keywords. Parsed by `parse_prtf()` in `python/src/rpgle/prtf.py`, and the layout rules are in [`LANGUAGE.md`](./LANGUAGE.md) under "Printer Files".
+
+```
+     A          R HEADING                   SKIPB(1) SPACEA(2)
+     A                                  1  2'CUSTOMER BALANCES'
+     A            PAGE           3S 0O  1 45PAGNBR EDTCDE(Z)
+     A          R DETAIL
+     A            CUSTNO         5S 0O     2EDTCDE(Z)
+     A            NAME          20A  O     8
+     A            BAL            9S 2O    28EDTCDE(J)
+```
+
+- **Line (columns 39-41):** blank means the same line as the previous field in the record; `5` means page line 5; `+1` means one line below the previous field.
+- **Position (columns 42-44):** the column the field starts in, counting from 1. Required.
+- **Record keywords:** `SKIPB(n)` and `SKIPA(n)` go to line n before or after the record; `SPACEB(n)` and `SPACEA(n)` move n lines (n of 1 is the next line, 2 leaves a blank line). Using a skip with a space keyword of the same side is an error, and `SPACEA(0)` (overprint) is not supported.
+- **Field keywords:** `EDTCDE(c)` formats a number (codes `1 2 3 4 A B C D J K L M Z`); `PAGNBR` makes a numeric field the page number.
+- **Constants** are quoted text with no field name, as in display files. A field can be conditioned on an indicator in columns 7-16 (`N90`), as in display files.
+- **Ignored** because they don't change what is printed: `TEXT`, `COLHDG`, `ALIAS`, `REF`, `REFFLD`, `INDARA`, `DSPATR`, `COLOR`, `FONT`, `CHRSIZ`, `CPI`, `LPI`, `HIGHLIGHT`, `UNDERLINE`, `FORMLEN`, `FORMTYPE`, `DRAWER`, `PRTQLTY`, `DUPLEX`, `PAGRTT`, `FNTCHRSET`. Any other keyword is an error.
+
 ## See Also
 
 - [`LANGUAGE.md`](./LANGUAGE.md) — how the RPGLE side of a program reads and writes these fields

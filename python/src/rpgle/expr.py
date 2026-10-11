@@ -48,7 +48,7 @@ from typing import Any, Callable, Optional
 
 from .errors import RpgleError
 
-_IN_NUM_RE = re.compile(r"^\*IN(\d\d)$")
+_IN_NUM_RE = re.compile(r"^\*IN(\d\d|O[A-GV])$")  # *IN03, and the overflow indicators *INOA-*INOG, *INOV
 
 
 def _kind(v: Any) -> str:

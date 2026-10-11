@@ -32,7 +32,9 @@ from .database import Database, FileHandle
 from .errors import RpgleError
 from .expr import split_top
 from .pf import PhysicalFile
+from .prtf import PrintFile
 from .rpgle import Program
+from .spool import PrinterFile, Spool
 
 FILE_OPS = frozenset(
     {"CHAIN", "SETLL", "SETGT", "READ", "READE", "READP", "READPE", "WRITE", "UPDATE", "DELETE"}
@@ -67,13 +69,33 @@ class FileRuntime:
         db: Optional[Database],
         pfs: Optional[dict[str, PhysicalFile]],
         klists: dict[str, list[str]],
+        spool: Optional[Spool] = None,
+        prtfs: Optional[dict[str, PrintFile]] = None,
     ):
         self._klists = klists
+        self._printers: dict[str, PrinterFile] = {}
+        self._print_oflind: dict[str, Optional[str]] = {}
+        self._print_by_format: dict[str, str] = {}
         self._files: dict[str, FileHandle] = {}
         self._by_format: dict[str, str] = {}
         self._last: Optional[FileHandle] = None
         # data structure name -> prefix of its variables ("cust." if qualified)
         self._ds_prefix = {d.name.lower(): (d.name.lower() + "." if d.qualified else "") for d in prog.dss if not d.dim}
+
+        printers = [f for f in prog.files if (f.device or "").upper() == "PRINTER"]
+        if printers and spool is None:
+            raise RpgleError("Program declares printer files but no spool was given (pass spool=Spool(...), or use the rpgle command)")
+        for fs in printers:
+            name = fs.name.upper()
+            if (fs.format or "").upper() != "E":
+                raise RpgleError(f"{name}: only externally described printer files (F-spec column 22 = E) are supported")
+            defs = (prtfs or {}).get(name)
+            if defs is None:
+                raise RpgleError(f"{name}: no printer file DDS was provided")
+            self._printers[name] = spool.open(fs.name, defs)  # type: ignore[union-attr]
+            self._print_oflind[name] = fs.oflind
+            for fmt_name in defs.formats:
+                self._print_by_format[fmt_name] = name
 
         disk = [f for f in prog.files if (f.device or "").upper() == "DISK"]
         if disk and db is None:
@@ -136,9 +158,8 @@ class FileRuntime:
         set_ind: Callable[[str, bool], None],
         evaluate: Callable[[str], Any],
         ds_prefix: Optional[dict[str, str]] = None,
+        is_on: Optional[Callable[[str], bool]] = None,
     ) -> None:
-        h = self._resolve(instr.factor2)
-        self._last = h
         op = instr.op
         prefix = ""
         if instr.ds:
@@ -146,6 +167,15 @@ class FileRuntime:
             if instr.ds.lower() not in known:
                 raise RpgleError(f"{instr.ds} is not a data structure")
             prefix = known[instr.ds.lower()]
+
+        target = (instr.factor2 or "").upper()
+        printer_name = self._print_by_format.get(target) or (target if target in self._printers else None)
+        if printer_name is not None:
+            self._print(instr, printer_name, target, variables, assign, prefix, is_on)
+            return
+
+        h = self._resolve(instr.factor2)
+        self._last = h
         hi = lo = eq = False  # what each indicator column will be set to
         try:
             if op == "CHAIN":
@@ -193,6 +223,21 @@ class FileRuntime:
         for ind, on in ((instr.ind_hi, hi), (instr.ind_lo, lo), (instr.ind_eq, eq)):
             if ind:
                 set_ind(ind, on)
+
+    def _print(self, instr, printer_name: str, target: str, variables: dict, assign, prefix: str, is_on) -> None:
+        printer = self._printers[printer_name]
+        if instr.op != "WRITE":
+            raise RpgleError(f"{printer.name} is a printer file: only WRITE works on it, not {instr.op}")
+        if target == printer_name:
+            raise RpgleError(f"WRITE to printer file {printer.name} needs one of its record formats: {', '.join(printer.defs.formats)}")
+        overflow = printer.write(
+            target,
+            lambda name: self._value(variables, prefix + name),
+            is_on or (lambda num: False),
+        )
+        oflind = self._print_oflind.get(printer_name)
+        if overflow and oflind:
+            assign(oflind, True)  # the program turns it off again, usually after printing its headings
 
     def _need_key(self, instr, evaluate: Callable[[str], Any]) -> tuple:
         key = self._key(instr.factor1, evaluate)

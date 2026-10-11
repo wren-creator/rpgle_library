@@ -329,7 +329,7 @@ def _parse_dcl_c(scope, rest: str) -> None:
 def _parse_dcl_f(prog: Program, rest: str) -> None:
     tokens = split_top(rest.replace("\t", " "), " ")
     tokens = [t for t in tokens if t]
-    name, device, usage, keyed = tokens[0], None, [], False
+    name, device, usage, keyed, oflind = tokens[0], None, [], False, None
     for tok in tokens[1:]:
         low = tok.lower()
         if low in ("disk", "workstn", "printer"):
@@ -338,11 +338,15 @@ def _parse_dcl_f(prog: Program, rest: str) -> None:
             keyed = True
         elif low.startswith("usage("):
             usage = [u.strip().lower().lstrip("*") for u in tok[6:-1].split(":")]
+        elif low.startswith("oflind("):
+            oflind = tok[7:-1].strip()
         else:
             raise RpgleError(f"dcl-f {name}: {tok} is not supported yet")
     device = device or "DISK"
     if device == "WORKSTN":
         ftype = "C"
+    elif device == "PRINTER":
+        ftype = "O"
     elif "update" in usage or "delete" in usage:
         ftype = "U"
     elif "output" in usage and "input" in usage:
@@ -359,6 +363,7 @@ def _parse_dcl_f(prog: Program, rest: str) -> None:
         device=device,
         addition="A" if "output" in usage and device == "DISK" else None,
         keyed=keyed,
+        oflind=oflind,
     )
     prog.files.append(fs)
     if device == "WORKSTN" and not prog.file.name:
