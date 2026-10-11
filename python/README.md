@@ -6,6 +6,8 @@ A zero-dependency RPG IV (RPGLE) and DDS interpreter for Python, with a command 
 pip install rpgle_library
 ```
 
+**Requires Python 3.12 or newer. Tested on 3.12, 3.13 and 3.14** (CI runs all three). Version 1.1.0.
+
 > **Why this library exists:** RPG IV is a mature language powering thousands of IBM i installations. The programmers who wrote it are retiring. This library is both a working implementation and a documented reference — see [`../docs/`](../docs/) for the companion glossary and language/DDS reference.
 
 ---

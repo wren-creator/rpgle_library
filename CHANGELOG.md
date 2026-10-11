@@ -1,8 +1,10 @@
 # Changelog
 
-Versions follow [`docs/PUBLISHING.md`](./docs/PUBLISHING.md). Everything below is in the **Python port** unless it says otherwise; the JS and Go ports are unchanged since 1.0.0. See "Status by language" and "Port parity" in the [README](./README.md).
+Versions follow [`docs/PUBLISHING.md`](./docs/PUBLISHING.md). Everything below is in the **Python port** unless it says otherwise; the JS and Go ports are unchanged since 1.0.0 (their parity work is listed under "Coming to the JS and Go ports" in the README). See "Status by language" and "Port parity" in the [README](./README.md).
 
-## Unreleased
+## 1.1.0 (Python port only), 2026-10-10
+
+The JS and Go ports stay at 1.0.0. **Requires Python 3.12 or newer; tested on 3.12, 3.13 and 3.14** (CI runs all three).
 
 The Python port grew from a screen-and-calculation interpreter into a runtime that runs real RPG programs with files, reports and calls between programs, with no IBM i. It was built in milestones; the roadmap in the README tracks them.
 
@@ -42,6 +44,7 @@ These are fixes. JS and Go still have the old behavior (see "Port parity" in the
 - A numeric field with decimals is shown with its decimal point (`0000048.75`), not rounded to a whole number.
 - `EXFMT` format names, file names and variable names are case-insensitive.
 - A fixed-form `DIM` keyword and any O-spec are now errors. They were silently ignored, so a program could run and quietly print nothing.
+- `requires-python` is now `>=3.12` (it said `>=3.9`, which was never tested). Nothing in the code needs anything newer than 3.9, so older versions may well work, but they are unsupported until someone runs the suite on them.
 - `parse_rpgle()` takes `path`, `include_dirs` and `defines`; `run_program()` takes `db`, `pfs`, `loader` and `spool`; `build_vars()` takes `pfs` and `prtfs`. All are optional, so existing callers are unaffected.
 
 ### Fixed
