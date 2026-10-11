@@ -31,7 +31,14 @@ PORTS = ("python", "js", "go")
 def run_ports(cases: pathlib.Path, tmp: pathlib.Path) -> dict:
     out = {p: tmp / f"{p}.json" for p in PORTS}
     steps = {
-        "python": ([sys.executable, str(HERE / "run_py.py"), str(cases), str(out["python"])], ROOT, {}),
+        # A private bytecode cache: Python trusts a .pyc whose source has the same
+        # size and modification second, so editing a file twice in one second
+        # (a quick edit and revert) could otherwise run the stale compiled copy.
+        "python": (
+            [sys.executable, "-X", f"pycache_prefix={tmp / 'pycache'}", str(HERE / "run_py.py"), str(cases), str(out["python"])],
+            ROOT,
+            {},
+        ),
         "js": (["node", str(HERE / "run_js.js"), str(cases), str(out["js"])], ROOT, {}),
         "go": (
             ["go", "test", "-run", "TestParityDump", "-count=1", "."],

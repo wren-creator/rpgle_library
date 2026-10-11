@@ -66,6 +66,8 @@ func parityExprs(exprs []string) []any {
 		Vars: map[string]*rpgle.Var{
 			"name":  {Type: 'A', Length: 20, Dec: 0, Value: rpgle.StringValue(fmt.Sprintf("%-20s", "BOB"))},
 			"other": {Type: 'A', Length: 5, Dec: 0, Value: rpgle.StringValue("BOB  ")},
+			"money": {Type: 'N', Length: 9, Dec: 2, Value: rpgle.NumberValue(5)},
+			"whole": {Type: 'N', Length: 5, Dec: 0, Value: rpgle.NumberValue(5)},
 		},
 		Indicators: map[string]bool{"03": true},
 	}

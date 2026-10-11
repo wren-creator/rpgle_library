@@ -9,10 +9,12 @@ from rpgle.interpreter import _format_field_text
 C = json.load(open(sys.argv[1]))
 def val(v):
     if isinstance(v, bool): return {"t": "b", "v": v}
-    if isinstance(v, (int, float)): return {"t": "n", "v": float(v)}
+    if isinstance(v, (int, float)):
+        if v != v or v in (float("inf"), float("-inf")): return {"error": True, "nonfinite": True}
+        return {"t": "n", "v": float(v)}
     return {"t": "s", "v": v}
 out = {}
-ctx = Context(vars={"name": Var(type="A", length=20, dec=0, value="BOB".ljust(20)), "other": Var(type="A", length=5, dec=0, value="BOB  ")}, indicators={"03": True})
+ctx = Context(vars={"name": Var(type="A", length=20, dec=0, value="BOB".ljust(20)), "other": Var(type="A", length=5, dec=0, value="BOB  "), "money": Var(type="N", length=9, dec=2, value=5.0), "whole": Var(type="N", length=5, dec=0, value=5.0)}, indicators={"03": True})
 out["exprs"] = []
 for e in C["exprs"]:
     try: out["exprs"].append(val(eval_expr(e, ctx)))

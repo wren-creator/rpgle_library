@@ -9,7 +9,7 @@ const { runProgram, compile, renderFormat } = require(root + "/src/interpreter")
 const C = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 const val = (v) => typeof v === "boolean" ? { t: "b", v } : typeof v === "number" ? { t: "n", v } : { t: "s", v };
 const out = {};
-const ctx = { vars: { name: { type: "A", length: 20, dec: 0, value: "BOB".padEnd(20) }, other: { type: "A", length: 5, dec: 0, value: "BOB  " } }, indicators: { "03": true } };
+const ctx = { vars: { name: { type: "A", length: 20, dec: 0, value: "BOB".padEnd(20) }, other: { type: "A", length: 5, dec: 0, value: "BOB  " }, money: { type: "N", length: 9, dec: 2, value: 5 }, whole: { type: "N", length: 5, dec: 0, value: 5 } }, indicators: { "03": true } };
 const safe = (f, onErr) => { try { return f(); } catch (e) { return onErr; } };
 out.exprs = C.exprs.map((e) => safe(() => { const v = evalExpr(e, ctx); return typeof v === "number" && !Number.isFinite(v) ? { error: true, nonfinite: true } : val(v); }, { error: true }));
 const dds1 = parseDds("     A          R MAIN\n     A            AMT            9  2O  1  1\n");
