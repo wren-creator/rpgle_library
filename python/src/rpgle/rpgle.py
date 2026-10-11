@@ -99,6 +99,21 @@ class ParamSpec:
 
 
 @dataclass
+class ProtoSpec:
+    """A free-form prototype (dcl-pr). One with extpgm('NAME') describes
+    another program that can be called by name; with extproc it describes
+    an external procedure, which isn't supported. A prototype for a
+    procedure defined in the same source is redundant and ignored.
+    """
+
+    name: str
+    extpgm: Optional[str] = None  # the program's name (upper-case), if it's an external program
+    extproc: bool = False
+    params: list[ParamSpec] = field(default_factory=list)
+    returns: Optional[DSpec] = None
+
+
+@dataclass
 class ProcSpec:
     """A free-form procedure (dcl-proc ... end-proc). Its statements are
     kept apart from the main line, and its dcl-s/dcl-ds declarations are
@@ -150,6 +165,8 @@ class Program:
     dspecs: list[DSpec] = field(default_factory=list)
     dss: list[DsSpec] = field(default_factory=list)  # free-form data structures
     procs: list[ProcSpec] = field(default_factory=list)  # free-form procedures
+    protos: dict[str, ProtoSpec] = field(default_factory=dict)  # free-form prototypes, by lower-case name
+    main_params: list[ParamSpec] = field(default_factory=list)  # the program's own dcl-pi: what a caller passes it
     statements: list[Statement] = field(default_factory=list)
 
 

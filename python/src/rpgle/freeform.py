@@ -14,7 +14,9 @@ blocks are stripped. Keywords are case-insensitive.
 
 Supported:
   declarations   ctl-opt (ignored), dcl-s, dcl-c, dcl-f, dcl-ds ... end-ds,
-                 dcl-proc ... end-proc with dcl-pi ... end-pi, dcl-pr (skipped)
+                 dcl-proc ... end-proc with dcl-pi ... end-pi, dcl-pr ... end-pr
+                 (extpgm names another program; a program's own dcl-pi is its
+                 parameter list)
                  (qualified, likeds, likerec, extname)
   calls          callp name(args);  or just  name(args);
   control flow   if/elseif/else/endif, dow, dou, enddo, for/endfor,
@@ -39,7 +41,7 @@ from typing import Optional
 
 from .errors import RpgleError
 from .expr import split_top
-from .rpgle import DSpec, DsSpec, FileSpec, ParamSpec, ProcSpec, Program, Statement
+from .rpgle import DSpec, DsSpec, FileSpec, ParamSpec, ProcSpec, Program, ProtoSpec, Statement
 
 _WORD = re.compile(r"[A-Za-z][A-Za-z0-9_-]*")
 _FOR = re.compile(
@@ -371,7 +373,8 @@ class _State:
         self.open_ds: Optional[DsSpec] = None  # between dcl-ds and end-ds
         self.proc: Optional[ProcSpec] = None  # between dcl-proc and end-proc
         self.in_pi = False  # between dcl-pi and end-pi
-        self.in_pr = False  # between dcl-pr and end-pr (prototypes are skipped)
+        self.pi_target: list[ParamSpec] = []  # where dcl-pi's parameters go: the procedure's, or the program's
+        self.open_pr: Optional[ProtoSpec] = None  # between dcl-pr and end-pr
 
     @property
     def scope(self):
@@ -389,15 +392,17 @@ def _statement(state: _State, text: str, line: int) -> None:
     word = m.group(0).lower() if m else ""
     rest = text[m.end() :] if m else text
 
-    if state.in_pr:  # prototypes describe procedures defined elsewhere; nothing to run
+    if state.open_pr is not None:
         if word == "end-pr":
-            state.in_pr = False
+            _close_proto(state)
+        else:
+            _add_param(state, text, state.open_pr.params)
         return
     if state.in_pi:
         if word == "end-pi":
             state.in_pi = False
         else:
-            _add_param(state, text)
+            _add_param(state, text, state.pi_target)
         return
     if state.open_ds is not None:
         if word == "end-ds":
@@ -449,8 +454,7 @@ def _statement(state: _State, text: str, line: int) -> None:
     if word == "dcl-pi":
         return _open_pi(state, rest.strip())
     if word == "dcl-pr":
-        state.in_pr = True
-        return
+        return _open_proto(state, rest.strip())
     if word == "dcl-s":
         return _parse_dcl_s(scope, state.visible_dspecs(), rest)
     if word == "dcl-ds":
@@ -551,21 +555,60 @@ def _open_proc(state: _State, rest: str) -> None:
 
 
 def _open_pi(state: _State, rest: str) -> None:
-    if state.proc is None:
-        raise RpgleError("dcl-pi outside a procedure (parameters of the main program are not supported)")
-    if state.proc.params or state.proc.returns:
-        raise RpgleError(f"procedure {state.proc.name} has two dcl-pi blocks")
     parts = rest.split(None, 1)
     if not parts:
         raise RpgleError("dcl-pi needs a name (or *n)")
-    if len(parts) == 2 and parts[1].strip():
-        ret = _make_dspec(state.visible_dspecs(), f"_return {parts[1]}", "return type")
-        state.proc.returns = ret
+    has_type = len(parts) == 2 and bool(parts[1].strip())
+    if state.proc is None:
+        # The program's own interface: what a caller of this program passes it.
+        if state.prog.main_params:
+            raise RpgleError("the program has two dcl-pi blocks")
+        if has_type:
+            raise RpgleError("a program can't return a value; only procedures can")
+        state.pi_target = state.prog.main_params
+    else:
+        if state.proc.params or state.proc.returns:
+            raise RpgleError(f"procedure {state.proc.name} has two dcl-pi blocks")
+        if has_type:
+            state.proc.returns = _make_dspec(state.visible_dspecs(), f"_return {parts[1]}", "return type")
+        state.pi_target = state.proc.params
     state.in_pi = True
 
 
-def _add_param(state: _State, text: str) -> None:
-    proc = state.proc
+_TYPE_WORDS = {"char", "varchar", "ind", "int", "uns", "packed", "zoned", "bindec", "float", "like"}
+
+
+def _open_proto(state: _State, rest: str) -> None:
+    tokens = [t for t in split_top(rest, " ") if t]
+    if not tokens:
+        raise RpgleError("dcl-pr needs a name")
+    proto = ProtoSpec(name=tokens[0])
+    for tok in tokens[1:]:
+        head = tok.lower().split("(")[0]
+        if head == "extpgm":
+            qm = re.match(r"^extpgm\s*\(\s*'([^']+)'\s*\)$", tok, re.IGNORECASE)
+            if "(" in tok and not qm:
+                raise RpgleError(f"dcl-pr {proto.name}: extpgm() takes a quoted program name, got {tok!r}")
+            proto.extpgm = (qm.group(1) if qm else proto.name).upper()
+        elif head == "extproc":
+            proto.extproc = True
+        elif head in _TYPE_WORDS:
+            proto.returns = _make_dspec(state.visible_dspecs(), f"_return {tok}", "return type")
+        else:
+            raise RpgleError(f"dcl-pr {proto.name}: {tok} is not supported yet")
+    state.open_pr = proto
+
+
+def _close_proto(state: _State) -> None:
+    proto = state.open_pr
+    state.open_pr = None
+    # Only external programs and procedures need remembering. A prototype for a
+    # procedure defined in this source is redundant, and the definition wins.
+    if proto.extpgm or proto.extproc:
+        state.prog.protos[proto.name.lower()] = proto
+
+
+def _add_param(state: _State, text: str, target: list[ParamSpec]) -> None:
     spec = _make_dspec(state.visible_dspecs(), text, "parameter")
     low = text.lower()
     mode = "value" if re.search(r"\bvalue\b", low) else "const" if re.search(r"\bconst\b", low) else "ref"
@@ -576,9 +619,9 @@ def _add_param(state: _State, text: str) -> None:
         if opts - {"*nopass"}:
             raise RpgleError(f"parameter {spec.name}: options({', '.join(sorted(opts - {'*nopass'}))}) is not supported")
         nopass = True
-    if any(p.spec.name.lower() == spec.name.lower() for p in proc.params):
+    if any(p.spec.name.lower() == spec.name.lower() for p in target):
         raise RpgleError(f"parameter {spec.name} is declared twice")
-    proc.params.append(ParamSpec(spec=spec, mode=mode, nopass=nopass))
+    target.append(ParamSpec(spec=spec, mode=mode, nopass=nopass))
 
 
 def parse_free(source: str) -> Program:
@@ -593,7 +636,7 @@ def parse_free(source: str) -> Program:
             raise RpgleError(f"line {line}: {e}") from None
     if state.open_ds is not None:
         raise RpgleError(f"data structure {state.open_ds.name} is missing its end-ds")
-    if state.in_pi or state.in_pr:  # the innermost unclosed block is the likely culprit
+    if state.in_pi or state.open_pr is not None:  # the innermost unclosed block is the likely culprit
         raise RpgleError("a dcl-pi or dcl-pr is missing its end-pi or end-pr")
     if state.proc is not None:
         raise RpgleError(f"procedure {state.proc.name} is missing its end-proc")

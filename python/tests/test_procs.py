@@ -55,7 +55,8 @@ class ProcParseTest(unittest.TestCase):
             ("**free\ndcl-proc a;\ndcl-proc b;\nend-proc;\n", "end-proc missing"),
             ("**free\nend-proc;\n", "no dcl-proc"),
             ("**free\ndcl-proc a;\nend-proc;\ndcl-proc a;\nend-proc;\n", "twice"),
-            ("**free\ndcl-pi *n;\nend-pi;\n", "outside a procedure"),
+            ("**free\ndcl-pi *n;\n  x char(1);\nend-pi;\ndcl-pi *n;\nend-pi;\n", "two dcl-pi"),
+            ("**free\ndcl-pi *n packed(5);\nend-pi;\n", "can't return"),
             ("**free\ndcl-proc a;\ndcl-pi *n;\n  x packed(3);\n", "end-pi"),
             ("**free\ndcl-proc a;\ndcl-pi *n;\n  x packed(3);\n  x packed(3);\nend-pi;\nend-proc;\n", "declared twice"),
             ("**free\ndcl-proc a;\ndcl-pi *n;\n  x packed(3) options(*omit);\nend-pi;\nend-proc;\n", "options"),
@@ -155,7 +156,7 @@ end-proc;
             ("num = f(); write outrec;\n", "missing argument"),
             ("num = f(1 : 2); write outrec;\n", "takes 1"),
             ("num = nosuch(1); write outrec;\n", "Unknown"),
-            ("nosuch(1);\n", "external"),
+            ("nosuch(1);\n", "extpgm"),
         ]:
             with self.subTest(src=src):
                 with self.assertRaises(RpgleError) as cm:

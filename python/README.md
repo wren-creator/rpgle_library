@@ -54,7 +54,7 @@ rpgle load programs/custmast.pf programs/custmast.csv --db shop.db     # fill a 
 rpgle run programs/custinq.rpgle --db shop.db                          # customer inquiry: CHAIN by number
 ```
 
-`/COPY` members are found next to the program and in any `-I folder`, and `-D NAME` defines a name for `/IF DEFINED(NAME)`.
+`/COPY` members and CALLed programs are found next to the program and in any `-I folder`, and `-D NAME` defines a name for `/IF DEFINED(NAME)`.
 
 Programs with `DISK` files need `--db`, and each file's layout comes from `<filename>.pf` (physical-file DDS) next to the program, or in `--pf-dir`. `custinq.rpgle` is the worked example: a screen, a `CHAIN`, and the not-found indicator.
 

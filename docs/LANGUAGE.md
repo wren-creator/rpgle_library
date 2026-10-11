@@ -111,7 +111,7 @@ A statement is everything up to a semicolon: it can span lines, and several can 
 
 **Opcode extenders** `(n)`, `(p)`, `(h)` are accepted and ignored. `(e)` raises an error, since it needs `%ERROR`.
 
-Not supported yet, and each raises an error naming the line rather than being skipped: arrays inside data structures, external procedures and programs (`CALL`, `extproc`, `extpgm`), date/time types, `monitor`, `reset`, `/copy`, `dcl-f` keywords other than the device, `keyed` and `usage`. Mixed source (`/free ... /end-free` blocks inside fixed-form) is not supported either: the whole file is one or the other.
+Not supported yet, and each raises an error naming the line rather than being skipped: arrays inside data structures, external procedures (`extproc`), date/time types, `monitor`, `reset`, `/copy`, `dcl-f` keywords other than the device, `keyed` and `usage`. Mixed source (`/free ... /end-free` blocks inside fixed-form) is not supported either: the whole file is one or the other.
 
 ### Data structures
 
@@ -238,6 +238,35 @@ A `**FREE` line at the top of a member is dropped: a member can't change the sou
 ```bash
 rpgle run prog.rpgle -I ~/rpg/copybooks -D DEBUG
 ```
+
+## Calling Other Programs
+
+*Python port only so far.* One program can call another by name. The called program is found by **lookup**, not registration: `rpgle` looks for `custlookup.rpgle` (then `.rpg`, `.sqlrpgle`) in the calling program's folder, then in the main program's folder, then in each `-I` folder. A library prefix (`'MYLIB/CUSTLOOKUP'`) is accepted and ignored, since there are folders here, not libraries. A program name is an IBM i object name, never a path, so a call can't reach outside the folders it searches.
+
+```
+// the caller                              // custlookup.rpgle, the called program
+dcl-pr custlookup extpgm;                  **free
+  id    packed(5) const;                   dcl-pi *n;
+  nm    char(20);                            id    packed(5) const;
+end-pr;                                      nm    char(20);
+                                           end-pi;
+custlookup(custno : who);                  ...
+                                           *inlr = *on;
+```
+
+`dcl-pr ... extpgm` names the program (`extpgm('OTHERNAME')` if the call name differs from the program's). The called program's own `dcl-pi` is its parameter list. It follows the same rules as a procedure's: by reference by default, `const`, `value`, `options(*nopass)`, arrays with a matching `dim`. Call it with `callp name(args);` or just `name(args);`. A program can't be called from inside an expression, since it has no return value.
+
+**Each program is its own world.** It has its own variables, indicators (`*IN90` in the callee is not `*IN90` in the caller) and files, with its own position in each. They share the database. A called program finds its own display file (`<workstn file>.dspf`, then `<program>.dspf`) and its physical-file DDS (`<file>.pf`) the same way the main program does, and a screen it shows (`exfmt`) reaches whoever is driving the main program.
+
+**`*INLR` decides whether it stays.** A called program that ends with `*INLR` **on** is finished: the next call starts it from scratch. One that ends with `*INLR` **off** stays active, as in real RPG. Its variables, indicators and file positions survive to the next call, which re-enters its main line from the top with the new parameters. That's how a subprogram keeps a running total or reads a file one record per call. (A program that fails with an error is not kept.)
+
+**A program can't call itself**, directly or through another program. That's a runtime error in real RPG (use a procedure for recursion), and here too. Calling the main program by its own name counts.
+
+**Errors.** A call that can't be made (program not found, parameters that don't fit, a program calling itself) is a `CallError`. An error raised *while the called program runs* is that program's, and propagates with its file name: `broken.rpgle:3: unrecognized statement`.
+
+From Python, pass a `ProgramLoader`: `run_program(prog, dds, db, pfs, loader=ProgramLoader([folder], main=path))`. The `rpgle` command builds one for you. A called program that uses files needs `--db` even if the main program doesn't: `programs/custinq-call.rpgle` is a screen with no files that calls `programs/custlookup.rpgle`, which owns the customer file.
+
+Not supported yet: fixed-form `CALL`/`PARM`/`PLIST` (next), `extproc` and service programs, `CALLB`, `extpgm` with a variable name, `*OMIT`, `%PARMS`, activation groups, and the called program's `return` value.
 
 ## DISK Files
 

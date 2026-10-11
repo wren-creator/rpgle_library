@@ -36,6 +36,7 @@ from .interpreter import (
     render_format,
     run_program,
 )
+from .loader import CallError, LoadedProgram, ProgramLoader
 from .pf import PfField, PhysicalFile, parse_pf
 from .rpgle import DSpec, FileSpec, Program, Statement, parse_rpgle
 
@@ -55,6 +56,10 @@ __all__ = [
     # database.py
     "Database",
     "FileHandle",
+    # loader.py
+    "ProgramLoader",
+    "LoadedProgram",
+    "CallError",
     # pf.py
     "PhysicalFile",
     "PfField",

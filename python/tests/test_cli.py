@@ -134,6 +134,15 @@ class DiskCliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("Alice Anderson", out)
 
+    def test_a_screen_program_that_calls_another_program_for_the_lookup(self):
+        self._load()
+        args = ["run", str(self.progs / "custinq-call.rpgle"), "--dspf", str(self.progs / "custinq.dspf"), "--db", self.db]
+        code, out = self._main(args, "20\n99\nF3\n")
+        self.assertEqual(code, 0)
+        self.assertIn("Bob Brewer", out)
+        self.assertIn("0000048.75", out)
+        self.assertIn("Customer not found", out)
+
     def test_not_found_shows_the_message(self):
         self._load()
         code, out = self._main(["run", str(self.progs / "custinq.rpgle"), "--db", self.db], "99\nF3\n")

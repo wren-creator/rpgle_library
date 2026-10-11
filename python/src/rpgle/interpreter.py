@@ -37,6 +37,7 @@ import copy
 import math
 import re
 from collections import ChainMap
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any, Generator, Optional
 
@@ -46,7 +47,8 @@ from .fileops import FILE_OPS, FileRuntime
 from .database import Database
 from .pf import PhysicalFile
 from .expr import ArrayVar, Context, Var, as_bool, as_float, as_string, eval_call, eval_expr, resolve_target, split_assignment
-from .rpgle import DSpec, DsSpec, ProcSpec, Program
+from .loader import CallError, LoadedProgram, ProgramLoader, program_key
+from .rpgle import DSpec, DsSpec, ParamSpec, ProcSpec, Program, ProtoSpec
 from ._helpers import pad_end_trunc, pad_start_zero
 
 __all__ = [
@@ -225,6 +227,7 @@ class Compiled:
     instrs: list[Instr]
     subroutines: dict[str, int]
     klists: dict[str, list[str]] = field(default_factory=dict)  # KLIST name -> KFLD field names
+    entry_params: list[str] = field(default_factory=list)  # fixed-form *ENTRY PLIST: the parameters a caller passes
 
 
 def compile_program(statements) -> Compiled:
@@ -721,6 +724,7 @@ def run_program(
     dds: DDS,
     db: Optional[Database] = None,
     pfs: Optional[dict[str, PhysicalFile]] = None,
+    loader: Optional[ProgramLoader] = None,
 ) -> Generator[ScreenData, Optional[Resume], None]:
     """Runs the program. Yields a ScreenData on every EXFMT; resume
     with .send(Resume(key, values)) where key is whatever function key
@@ -731,12 +735,73 @@ def run_program(
     A program with DISK files needs db (a Database) and pfs, a dict of
     upper-case file name -> PhysicalFile (see pf.parse_pf). Changes are
     committed when the program ends or the generator is closed.
+
+    A program that calls other programs needs a loader
+    (loader.ProgramLoader), which finds them by name in its folders.
     """
     try:
-        yield from _run_program(prog, dds, db, pfs)
+        yield from _run_program(prog, dds, db, pfs, loader)
     finally:
         if db is not None:
             db.commit()
+
+
+def _py_value(v: Any) -> Any:
+    """A Var's value as the expression evaluator would see it."""
+    return v.value == "1" if getattr(v, "kind", "") == "ind" else getattr(v, "value", None)
+
+
+def _bind_args(
+    who: str, params: list[ParamSpec], args: list, error: type = RpgleError, lenient_ref: bool = False
+) -> dict[str, Any]:
+    """Binds a call's arguments to the callee's parameters, for both
+    procedures and programs. Each argument is (value, Var or None); the
+    Var is there when the caller passed a plain variable. Returns
+    {parameter name (lower): the Var or ArrayVar the callee will use}.
+
+    By reference (the default) aliases the caller's own variable, so the
+    callee's changes show through. const aliases it too, or holds a
+    temporary when given an expression; value takes a private copy.
+    lenient_ref lets a by-reference parameter take an expression too (the
+    callee just works on a temporary), for old fixed-form programs whose
+    parameter lists can't say const.
+    """
+    if len(args) > len(params):
+        raise error(f"{who} takes {len(params)} parameter(s), got {len(args)}")
+    bound: dict[str, Any] = {}
+    for i, p in enumerate(params):
+        key = p.spec.name.lower()
+        if i >= len(args):
+            if not p.nopass:
+                raise error(f"{who}: missing argument for parameter {p.spec.name}")
+            bound[key] = _new_var(p.spec)
+            continue
+        value, var = args[i]
+        want = "A" if p.spec.dec is None else "N"
+        if p.spec.dim:
+            if not isinstance(var, ArrayVar):
+                raise error(f"{who}: parameter {p.spec.name} is an array: pass a whole array")
+            if len(var.elems) != p.spec.dim:
+                raise error(
+                    f"{who}: parameter {p.spec.name} is dim({p.spec.dim}) but the array passed has {len(var.elems)} elements"
+                )
+            bound[key] = copy.deepcopy(var) if p.mode == "value" else var
+            continue
+        if isinstance(var, ArrayVar):
+            raise error(f"{who}: parameter {p.spec.name} takes a single value, not an array")
+        if p.mode == "value" or (p.mode == "const" and var is None) or (lenient_ref and var is None):
+            bound[key] = _new_var(p.spec)  # a private copy (or a temporary for an expression)
+            _store(bound[key], value)
+        elif var is None:
+            raise error(
+                f"{who}: parameter {p.spec.name} is passed by reference, so the argument must be a "
+                "variable (declare the parameter const to pass an expression)"
+            )
+        elif var.type != want:
+            raise error(f"{who}: parameter {p.spec.name} expects {'text' if want == 'A' else 'a number'}")
+        else:
+            bound[key] = var  # the caller's own variable: changes show through
+    return bound
 
 
 @dataclass
@@ -756,6 +821,35 @@ class _Frame:
     for_state: dict[int, tuple[float, float]] = field(default_factory=dict)  # FORTEST index -> (limit, by)
 
 
+class _Calls:
+    """State shared by a program and every program it calls, directly or not."""
+
+    def __init__(self, loader: Optional[ProgramLoader], db: Optional[Database]):
+        self.loader = loader
+        self.db = db
+        # Programs currently running, outermost first. RPG programs can't
+        # call themselves, directly or through another program.
+        self.active: list[str] = [loader.main_name] if loader is not None and loader.main_name else []
+        # Programs that ended with *INLR off. Like the real thing they stay
+        # active: variables, file positions and indicators survive to the next call.
+        self.retained: dict[str, "_Instance"] = {}
+
+
+@dataclass
+class _Instance:
+    rt: "_Runtime"
+    compiled: Compiled
+    loaded: LoadedProgram
+
+    @property
+    def globals(self) -> dict[str, Any]:
+        return self.rt.globals
+
+    @property
+    def indicators(self) -> dict[str, bool]:
+        return self.rt.indicators
+
+
 class _Runtime:
     """State shared by every frame of one program run."""
 
@@ -768,7 +862,12 @@ class _Runtime:
         indicators: dict[str, bool],
         files: FileRuntime,
         procs: dict[str, tuple[ProcSpec, Compiled]],
+        calls: Optional[_Calls] = None,
+        directory: Optional[Path] = None,
     ):
+        self.calls = calls
+        self.directory = directory  # this program's folder: where its CALLs look first
+        self.protos = prog.protos
         self.prog = prog
         self.dds = dds
         self.pfs = pfs
@@ -786,7 +885,7 @@ class _Runtime:
             vars=variables,
             indicators=self.indicators,
             file_status=self.files.status,
-            has_proc=lambda name: name.lower() in self.procs,
+            has_proc=lambda name: name.lower() in self.procs or name.lower() in self.protos,
             call_proc=self.call_value,
         )
 
@@ -805,42 +904,7 @@ class _Runtime:
         if entry is None:
             raise RpgleError(f"Unknown procedure: {name}")
         proc, compiled = entry
-        if len(args) > len(proc.params):
-            raise RpgleError(f"{proc.name} takes {len(proc.params)} parameter(s), got {len(args)}")
-
-        local: dict[str, Var] = {}
-        for i, p in enumerate(proc.params):
-            key = p.spec.name.lower()
-            if i >= len(args):
-                if not p.nopass:
-                    raise RpgleError(f"{proc.name}: missing argument for parameter {p.spec.name}")
-                local[key] = _new_var(p.spec)
-                continue
-            value, var = args[i]
-            want = "A" if p.spec.dec is None else "N"
-            if p.spec.dim:
-                if not isinstance(var, ArrayVar):
-                    raise RpgleError(f"{proc.name}: parameter {p.spec.name} is an array: pass a whole array")
-                if len(var.elems) != p.spec.dim:
-                    raise RpgleError(
-                        f"{proc.name}: parameter {p.spec.name} is dim({p.spec.dim}) but the array passed has {len(var.elems)} elements"
-                    )
-                local[key] = copy.deepcopy(var) if p.mode == "value" else var
-                continue
-            if isinstance(var, ArrayVar):
-                raise RpgleError(f"{proc.name}: parameter {p.spec.name} takes a single value, not an array")
-            if p.mode == "value" or (p.mode == "const" and var is None):
-                local[key] = _new_var(p.spec)  # a private copy (or a temporary for an expression)
-                _store(local[key], value)
-            elif var is None:
-                raise RpgleError(
-                    f"{proc.name}: parameter {p.spec.name} is passed by reference, so the argument must be a "
-                    "variable (declare the parameter const to pass an expression)"
-                )
-            elif var.type != want:
-                raise RpgleError(f"{proc.name}: parameter {p.spec.name} expects {'text' if want == 'A' else 'a number'}")
-            else:
-                local[key] = var  # the caller's own variable: changes show through
+        local = _bind_args(proc.name, proc.params, args)
 
         for d in proc.dspecs:
             local[d.name.lower()] = _new_var(d)
@@ -880,6 +944,8 @@ class _Runtime:
         """Calls a procedure from inside an expression. Expressions can't
         pause for the screen, so a procedure called this way can't EXFMT.
         """
+        if name.lower() not in self.procs:
+            raise RpgleError(f"{name} is another program, which can't be called from inside an expression; use CALLP")
         proc, frame = self._proc_frame(name, args)
         gen = self.exec(frame)
         try:
@@ -893,6 +959,48 @@ class _Runtime:
             f"{proc.name} shows a screen (EXFMT), so it can't be called from inside an expression; "
             "call it with CALLP instead"
         )
+
+    def call_program(self, target: str, args: list, lenient_ref: bool = False) -> Generator[ScreenData, Optional[Resume], bool]:
+        """Calls another program by name and returns whether it ended with
+        *INLR on. Raises CallError if the call can't be made (the CALL's
+        error indicator catches that); anything raised while the called
+        program runs is the program's own, and propagates.
+        """
+        calls = self.calls
+        if calls is None or calls.loader is None:
+            raise CallError("CALL needs a program loader: pass loader=ProgramLoader(...) to run_program, or use the rpgle command")
+        key = program_key(target)
+        if key in calls.active:
+            raise CallError(f"{key} is already running: an RPG program can't call itself, directly or through another program")
+        loaded = calls.loader.load(key, self.directory)
+        inst = calls.retained.get(key)
+        if inst is None:
+            inst = _new_instance(loaded, calls)
+
+        if loaded.prog.main_params:
+            params = loaded.prog.main_params
+        else:  # fixed-form: *ENTRY PLIST names variables the program declared itself
+            params = [_param_for(n, inst.globals) for n in inst.compiled.entry_params]
+        try:
+            bound = _bind_args(key, params, args, error=CallError, lenient_ref=lenient_ref or not loaded.prog.main_params)
+        except CallError:
+            raise
+        inst.globals.update(bound)
+
+        calls.active.append(key)
+        try:
+            yield from inst.rt.exec(inst.rt.main_frame(inst.compiled))
+        except BaseException:
+            calls.retained.pop(key, None)  # whatever state it was in is no longer trustworthy
+            raise
+        finally:
+            calls.active.pop()
+        last_record = bool(inst.indicators.get("LR", False))
+        if last_record:
+            calls.retained.pop(key, None)  # closed: the next call starts it afresh
+        else:
+            calls.retained[key] = inst
+        return last_record
 
     def call_stmt(self, name: str, args: list) -> Generator[ScreenData, Optional[Resume], Any]:
         """Calls a procedure as a statement (CALLP). Screens it shows
@@ -1052,9 +1160,16 @@ class _Runtime:
 
             elif op == "CALLP":
                 name, args = eval_call(instr.expr, ctx)
-                if name.lower() not in self.procs:
-                    raise RpgleError(f"Unknown procedure: {name} (external procedures are not supported)")
-                yield from self.call_stmt(name, args)
+                low = name.lower()
+                if low in self.procs:
+                    yield from self.call_stmt(name, args)
+                elif low in self.protos:
+                    proto = self.protos[low]
+                    if proto.extpgm is None:
+                        raise RpgleError(f"{name}: external procedures (extproc) are not supported, only programs (extpgm)")
+                    yield from self.call_program(proto.extpgm, args)
+                else:
+                    raise RpgleError(f"Unknown procedure: {name} (declare it with dcl-proc, or dcl-pr ... extpgm for another program)")
                 pc += 1
 
             elif op == "RETURN":
@@ -1063,6 +1178,34 @@ class _Runtime:
             else:
                 raise RpgleError(f"Unimplemented RPG instruction: {op}")
         return None
+
+
+def _param_for(name: str, variables: dict[str, Any]) -> ParamSpec:
+    """A fixed-form program's *ENTRY PLIST names variables it declares; the
+    parameter's type and length are whatever that variable is.
+    """
+    v = variables.get(name.lower())
+    if not isinstance(v, Var):
+        raise RpgleError(f"PARM field {name} is not declared as a standalone field (D-spec)")
+    spec = DSpec(name=name, deftype="S", length=v.length, dec=None if v.type == "A" else v.dec, kind=v.kind)
+    return ParamSpec(spec=spec, mode="ref", nopass=True)
+
+
+def _new_instance(loaded: LoadedProgram, calls: _Calls) -> _Instance:
+    """Builds a program ready to run: its variables, files and procedures."""
+    prog = loaded.prog
+    try:
+        variables = build_vars(prog, loaded.dds, loaded.pfs)
+        indicators: dict[str, bool] = {}
+        compiled = compile_program(prog.statements)
+        files = FileRuntime(prog, calls.db, loaded.pfs, compiled.klists)
+        rt = _Runtime(
+            prog, loaded.dds, loaded.pfs, variables, indicators, files, compile_procs(prog.procs),
+            calls=calls, directory=loaded.path.parent,
+        )
+    except RpgleError as e:
+        raise RpgleError(f"{loaded.key}: {e}") from None
+    return _Instance(rt=rt, compiled=compiled, loaded=loaded)
 
 
 def compile_procs(procs: list[ProcSpec]) -> dict[str, tuple[ProcSpec, Compiled]]:
@@ -1076,11 +1219,18 @@ def compile_procs(procs: list[ProcSpec]) -> dict[str, tuple[ProcSpec, Compiled]]
 
 
 def _run_program(
-    prog: Program, dds: DDS, db: Optional[Database], pfs: Optional[dict[str, PhysicalFile]]
+    prog: Program,
+    dds: DDS,
+    db: Optional[Database],
+    pfs: Optional[dict[str, PhysicalFile]],
+    loader: Optional[ProgramLoader] = None,
 ) -> Generator[ScreenData, Optional[Resume], None]:
     variables = build_vars(prog, dds, pfs)
     indicators: dict[str, bool] = {}
     compiled = compile_program(prog.statements)
     files = FileRuntime(prog, db, pfs, compiled.klists)
-    rt = _Runtime(prog, dds, pfs, variables, indicators, files, compile_procs(prog.procs))
+    rt = _Runtime(
+        prog, dds, pfs, variables, indicators, files, compile_procs(prog.procs),
+        calls=_Calls(loader, db), directory=loader.dirs[0] if loader is not None and loader.dirs else None,
+    )
     yield from rt.exec(rt.main_frame(compiled))

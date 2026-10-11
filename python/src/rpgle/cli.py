@@ -37,8 +37,9 @@ from .database import Database
 from .dds import DDS, parse_dds
 from .errors import RpgleError
 from .interpreter import Resume, ScreenData, run_program
+from .loader import ProgramLoader, load_pfs
 from .pf import PhysicalFile, parse_pf
-from .rpgle import Program, parse_rpgle
+from .rpgle import parse_rpgle
 
 ROWS, COLS = 24, 80
 _FKEY = re.compile(r"^F(\d{1,2})$", re.IGNORECASE)
@@ -95,6 +96,7 @@ def drive(
     stdout: TextIO,
     db: Optional[Database] = None,
     pfs: Optional[dict[str, PhysicalFile]] = None,
+    loader: Optional[ProgramLoader] = None,
 ) -> int:
     """Runs prog to completion against the given streams. Returns a
     process exit code: 0 when the program ends or input runs out.
@@ -103,7 +105,7 @@ def drive(
     def out(s: str = "") -> None:
         print(s, file=stdout)
 
-    gen = run_program(prog, dds, db, pfs)
+    gen = run_program(prog, dds, db, pfs, loader)
     try:
         return _drive_loop(gen, stdin, stdout, out)
     finally:
@@ -162,22 +164,6 @@ def _load_dds(rpg_path: pathlib.Path, dspf_arg: Optional[str]) -> DDS:
     return parse_dds("")
 
 
-def _find_pf(name: str, directory: pathlib.Path) -> pathlib.Path:
-    for candidate in (name.lower(), name.upper(), name):
-        p = directory / f"{candidate}.pf"
-        if p.exists():
-            return p
-    raise RpgleError(f"No physical file DDS for {name}: expected {directory / (name.lower() + '.pf')}")
-
-
-def _load_pfs(prog: Program, directory: pathlib.Path) -> dict[str, PhysicalFile]:
-    pfs = {}
-    for fs in prog.files:
-        if (fs.device or "").upper() == "DISK":
-            pfs[fs.name.upper()] = parse_pf(fs.name, _find_pf(fs.name, directory).read_text())
-    return pfs
-
-
 def load_csv(pf: PhysicalFile, db: Database, csv_path: pathlib.Path) -> int:
     """Appends every row of the CSV to the file. The header row must
     name every field of the record format (any order, any case).
@@ -213,7 +199,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     run.add_argument("--dspf", help="display file DDS (default: same name with .dspf, if it exists)")
     run.add_argument("--db", help="SQLite database holding the program's DISK files (required if it has any)")
     run.add_argument("--pf-dir", help="folder of <file>.pf DDS files (default: next to the program)")
-    run.add_argument("-I", dest="include_dirs", action="append", default=[], metavar="DIR", help="folder to search for /COPY members (repeatable)")
+    run.add_argument("-I", dest="include_dirs", action="append", default=[], metavar="DIR", help="folder to search for /COPY members and CALLed programs (repeatable)")
     run.add_argument("-D", dest="defines", action="append", default=[], metavar="NAME", help="define NAME for /IF DEFINED(NAME) (repeatable)")
     load = sub.add_parser("load", help="append a CSV file's rows to a DISK file")
     load.add_argument("pf", help="the file's physical-file DDS, e.g. custmast.pf (file name = its stem)")
@@ -234,20 +220,26 @@ def main(argv: Optional[list[str]] = None) -> int:
             return 0
 
         rpg_path = pathlib.Path(args.source)
-        prog = parse_rpgle(
-            rpg_path.read_text(),
-            path=rpg_path,
-            include_dirs=[pathlib.Path(d) for d in args.include_dirs],
-            defines=args.defines,
-        )
+        include_dirs = [pathlib.Path(d) for d in args.include_dirs]
+        prog = parse_rpgle(rpg_path.read_text(), path=rpg_path, include_dirs=include_dirs, defines=args.defines)
         dds = _load_dds(rpg_path, args.dspf)
         has_disk = any((f.device or "").upper() == "DISK" for f in prog.files)
         if has_disk and not args.db:
             raise RpgleError("This program uses DISK files. Pass --db <database file> to say where they live.")
-        db = Database(args.db) if has_disk else None
+        # A program that declares no files may still CALL one that does, so any
+        # --db is opened, not just one a file-using main program asked for.
+        db = Database(args.db) if args.db else None
         try:
-            pfs = _load_pfs(prog, pathlib.Path(args.pf_dir) if args.pf_dir else rpg_path.parent) if has_disk else None
-            return drive(prog, dds, sys.stdin, sys.stdout, db, pfs)
+            pf_dir = pathlib.Path(args.pf_dir) if args.pf_dir else rpg_path.parent
+            pfs = load_pfs(prog, [pf_dir]) if has_disk else None
+            loader = ProgramLoader(
+                dirs=[rpg_path.parent, *include_dirs],
+                include_dirs=include_dirs,
+                defines=args.defines,
+                pf_dirs=[pf_dir],
+                main=rpg_path,
+            )
+            return drive(prog, dds, sys.stdin, sys.stdout, db, pfs, loader)
         finally:
             if db is not None:
                 db.close()
