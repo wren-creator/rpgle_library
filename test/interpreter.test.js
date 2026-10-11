@@ -260,3 +260,15 @@ test('balanced blocks compile as before', () => {
     cs('SELECT'), cs('WHEN', '1 = 1'), cs('OTHER'), cs('ENDSL'),
   ));
 });
+
+// The same accept/reject list is pinned in all three ports: only plain
+// numbers are numbers. (Python's float() alone would take "1_000" and Arabic-
+// Indic digits, so it was tightened to match.)
+test('only plain numbers are numbers in a numeric field', () => {
+  for (const typed of ['1_000', '\u0663', 'inf', 'nan', '0x10', '1,5', '--5', '5-', '1 2']) {
+    assert.throws(() => typeInto({ custno: typed }), /is not a number/, JSON.stringify(typed));
+  }
+  for (const typed of ['+5', '-5', '.5', '5.', '1e2', ' 42 ', '007']) {
+    assert.doesNotThrow(() => typeInto({ custno: typed }), JSON.stringify(typed));
+  }
+});

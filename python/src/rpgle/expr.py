@@ -74,17 +74,22 @@ def as_bool(v: Any) -> bool:
     return False
 
 
+# What a number looks like as text: ASCII digits, an optional sign, an optional
+# decimal point and exponent. Python's float() also takes "1_000", Arabic-Indic
+# digits, "inf" and "nan"; none of those are numbers a person types into an RPG
+# field, and the JS and Go ports reject them, so this is deliberately stricter.
+_NUMBER_TEXT = re.compile(r"^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$", re.ASCII)
+
+
 def as_float(v: Any) -> float:
-    """Coerces a value to a number for arithmetic."""
+    """Coerces a value to a number for arithmetic. Text that isn't a number is NaN."""
     if isinstance(v, bool):
         return 1.0 if v else 0.0
     if isinstance(v, (int, float)):
         return float(v)
     if isinstance(v, str):
-        try:
-            return float(v.strip())
-        except ValueError:
-            return math.nan
+        t = v.strip()
+        return float(t) if _NUMBER_TEXT.match(t) else math.nan
     return 0.0
 
 
@@ -277,12 +282,10 @@ def _arity(name: str, args: list, lo: int, hi: Optional[int] = None) -> None:
 
 
 def _num(name: str, v: Any) -> float:
-    if isinstance(v, str):
-        try:
-            return float(v.strip())
-        except ValueError:
-            raise RpgleError(f"{name}: {v!r} is not a number") from None
-    return as_float(v)
+    n = as_float(v)
+    if isinstance(v, str) and math.isnan(n):
+        raise RpgleError(f"{name}: {v!r} is not a number")
+    return n
 
 
 def _trunc(n: float, dec: int) -> float:

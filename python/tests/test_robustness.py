@@ -29,6 +29,19 @@ class NumericInputTest(unittest.TestCase):
         _, screen = self.start()
         self.assertEqual(screen.numeric_fields, frozenset({"custno"}))
 
+    def test_only_plain_numbers_are_numbers(self):
+        # float() would accept the underscore and the Arabic-Indic digit; the JS and
+        # Go ports (and a person typing into an RPG field) don't. Same answer in all three.
+        for typed in ("1_000", "\u0663", "inf", "nan", "0x10", "1,5", "--5", "5-", "1 2"):
+            with self.subTest(typed=typed):
+                gen, _ = self.start()
+                with self.assertRaises(RpgleError):
+                    gen.send(Resume(key="ENTER", values={"custno": typed}))
+        for typed in ("+5", "-5", ".5", "5.", "1e2", " 42 ", "007"):
+            with self.subTest(typed=typed):
+                gen, _ = self.start()
+                gen.send(Resume(key="ENTER", values={"custno": typed}))
+
     def test_letters_in_a_numeric_field_are_an_error_that_names_them(self):
         gen, _ = self.start()
         with self.assertRaises(RpgleError) as cm:

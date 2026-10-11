@@ -444,3 +444,19 @@ func TestBalancedBlocksCompileAsBefore(t *testing.T) {
 		t.Errorf("balanced blocks: %v", err)
 	}
 }
+
+// The same accept/reject list is pinned in all three ports: only plain
+// numbers are numbers. (Python's float() alone would take "1_000" and Arabic-
+// Indic digits, so it was tightened to match.)
+func TestOnlyPlainNumbersAreNumbersInANumericField(t *testing.T) {
+	for _, typed := range []string{"1_000", "\u0663", "inf", "nan", "0x10", "1,5", "--5", "5-", "1 2"} {
+		if _, err := typeInto(t, map[string]string{"custno": typed}); err == nil || !strings.Contains(err.Error(), "is not a number") {
+			t.Errorf("typed %q: want a not-a-number error, got %v", typed, err)
+		}
+	}
+	for _, typed := range []string{"+5", "-5", ".5", "5.", "1e2", " 42 ", "007"} {
+		if _, err := typeInto(t, map[string]string{"custno": typed}); err != nil {
+			t.Errorf("typed %q: %v", typed, err)
+		}
+	}
+}
