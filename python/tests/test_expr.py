@@ -167,3 +167,74 @@ class TestBuiltIns(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBuiltInEdges(unittest.TestCase):
+    """Edge behavior that the JS and Go ports must match exactly (see tools/parity)."""
+
+    def check(self, cases):
+        for src, want in cases:
+            with self.subTest(src=src):
+                self.assertEqual(eval_expr(src, empty_ctx()), want)
+
+    def fails(self, sources):
+        for src in sources:
+            with self.subTest(src=src):
+                with self.assertRaises(RpgleError):
+                    eval_expr(src, empty_ctx())
+
+    def test_a_position_or_length_that_is_not_a_whole_number_is_an_error_not_a_crash(self):
+        # int(nan) used to escape as a raw ValueError
+        self.fails(
+            [
+                "%dec('5' : 5 : 'x')",
+                "%scan('a' : 'abc' : 'x')",
+                "%replace('a' : 'bcd' : 'x')",
+                "%replace('a' : 'bcd' : 1 : 'x')",
+                "%subst('abc' : 'x')",
+                "%subst('abc' : 1 : 'x')",
+            ]
+        )
+
+    def test_decimal_positions_are_limited_to_what_rpg_allows(self):
+        self.fails(["%dec(1 : 5 : 64)", "%dec(1 : 5 : -1)", "%dech(1 : 5 : 400)"])
+        self.check([("%dec('12.345' : 5 : 0)", 12.0), ("%dec(1 : 63 : 63)", 1.0)])
+
+    def test_numbers_become_text_in_plain_decimal_never_exponent_form(self):
+        self.check(
+            [
+                ("%char(0.0000001)", "0.0000001"),
+                ("%char(0.00001234)", "0.00001234"),
+                ("%char(10000000000000000000000)", "10000000000000000000000"),
+                ("%char(123456789012345678)", "123456789012345680"),
+                ("%char(0.1 + 0.2)", "0.30000000000000004"),
+                ("%char(-2.5)", "-2.5"),
+                ("%char(7)", "7"),
+            ]
+        )
+
+    def test_length_and_substrings_count_characters_not_bytes(self):
+        self.check(
+            [
+                ("%len('café')", 4.0),
+                ("%len('\U0001f600x')", 2.0),
+                ("%subst('cafés' : 4 : 2)", "és"),
+                ("%scan('é' : 'café')", 4.0),
+                ("%replace('\U0001f600' : 'abc' : 2 : 1)", "a\U0001f600c"),
+            ]
+        )
+
+    def test_subst_clamps_instead_of_failing(self):
+        self.check(
+            [
+                ("%subst('hello' : 0 : 2)", "he"),
+                ("%subst('hello' : -3 : 2)", "he"),
+                ("%subst('hello' : 9)", ""),
+                ("%subst('hello' : 3 : 99)", "llo"),
+                ("%subst('hello' : 3 : -1)", ""),
+                ("%subst('hello' : 2)", "ello"),
+            ]
+        )
+
+    def test_wrong_number_of_arguments(self):
+        self.fails(["%trim()", "%len('a' : 'b')", "%subst('a')", "%scan('a')", "%replace('a')", "%min(1)", "%abs()"])

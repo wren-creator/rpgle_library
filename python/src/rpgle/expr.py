@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import math
 import re
+from decimal import Decimal
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
@@ -96,9 +97,12 @@ def as_float(v: Any) -> float:
 def _format_number_for_string(n: float) -> str:
     if math.isnan(n) or math.isinf(n):
         raise RpgleError("That value is not a number, so it can't be turned into text")
-    if n == math.trunc(n) and not math.isinf(n):
-        return str(int(n))
-    return repr(n)
+    if n == math.trunc(n):
+        return str(int(n))  # whole numbers: every digit, exactly
+    text = repr(n)  # the shortest digits that round-trip...
+    if "e" in text or "E" in text:
+        text = format(Decimal(text), "f")  # ...but never in exponent form (1.5e-07 is 0.00000015)
+    return text
 
 
 def as_string(v: Any) -> str:
@@ -288,6 +292,15 @@ def _num(name: str, v: Any) -> float:
     return n
 
 
+def _whole(name: str, v: Any) -> int:
+    """A position, length or count: must be a number; any fraction is dropped.
+    (int(nan) is a raw ValueError, and int(inf) an OverflowError.)"""
+    n = as_float(v)
+    if math.isnan(n) or math.isinf(n):
+        raise RpgleError(f"{name}: {v!r} is not a whole number")
+    return int(n)
+
+
 def _trunc(n: float, dec: int) -> float:
     f = 10**dec
     return math.trunc(n * f) / f
@@ -312,7 +325,9 @@ def _bif_char(name, args, var):
 
 def _bif_dec(name, args, var, half=False):
     _arity(name, args, 3)
-    n, dec = _num(name, args[0]), int(as_float(args[2]))
+    n, dec = _num(name, args[0]), _whole(name, args[2])
+    if not 0 <= dec <= 63:
+        raise RpgleError(f"{name}: decimal positions must be 0 to 63, got {dec}")
     return _half_adjust(n, dec) if half else _trunc(n, dec)
 
 
@@ -357,7 +372,7 @@ def _bif_minmax(name, args, var):
 def _bif_scan(name, args, var):
     _arity(name, args, 2, 3)
     needle, hay = as_string(args[0]), as_string(args[1])
-    start = int(as_float(args[2])) if len(args) == 3 else 1
+    start = _whole(name, args[2]) if len(args) == 3 else 1
     if needle == "" or start < 1:
         return 0.0
     return float(hay.find(needle, start - 1) + 1)
@@ -366,8 +381,8 @@ def _bif_scan(name, args, var):
 def _bif_replace(name, args, var):
     _arity(name, args, 2, 4)
     repl, src = as_string(args[0]), as_string(args[1])
-    start = int(as_float(args[2])) if len(args) >= 3 else 1
-    length = int(as_float(args[3])) if len(args) == 4 else len(repl)
+    start = _whole(name, args[2]) if len(args) >= 3 else 1
+    length = _whole(name, args[3]) if len(args) == 4 else len(repl)
     if start < 1:
         raise RpgleError("%REPLACE: start must be 1 or more")
     return src[: start - 1] + repl + src[start - 1 + length :]
@@ -376,8 +391,8 @@ def _bif_replace(name, args, var):
 def _bif_subst(name, args, var):
     _arity(name, args, 2, 3)
     s = as_string(args[0])
-    start = int(as_float(args[1])) - 1  # RPG %SUBST start is 1-based
-    length = len(s) - start if len(args) <= 2 else int(as_float(args[2]))
+    start = _whole(name, args[1]) - 1  # RPG %SUBST start is 1-based
+    length = len(s) - start if len(args) <= 2 else _whole(name, args[2])
     start = max(0, min(start, len(s)))
     end = max(start, min(start + length, len(s)))
     return s[start:end]
