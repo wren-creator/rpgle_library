@@ -2,25 +2,29 @@
 
 This is a narrative walkthrough of the RPG IV (RPGLE) subset `rpgle_library` actually parses and runs. See [`GLOSSARY.md`](./GLOSSARY.md) if a term here is unfamiliar, and the mission section in the root [`README.md`](../README.md) for why this exists.
 
-## Overview: The Four Spec Types
+## Overview: Spec Types, and Free-Form
 
-Fixed-form RPG source is organized into "specs," identified by a letter in column 6. This library only reads three of them.
+Fixed-form RPG source is organized into "specs," identified by a letter in column 6. This library reads F, D and C specs (and refuses O specs, below). Free-form source (`**FREE`, Python port) has no columns and is covered in "Free-Form RPG" further down; it produces the same records, so everything after the parsing stage is shared.
 
 ### H-spec — not supported
 
-Header specs set compile-time/program-level options (date format, debug flags, etc.). Nothing this library does depends on them, so they're skipped entirely rather than parsed.
+Header specs set compile-time/program-level options (date format, debug flags, etc.). Nothing this library does depends on them, so they're skipped entirely rather than parsed. (Free-form `ctl-opt` is handled the same way.)
 
-### F-spec — WORKSTN and DISK files (fixed-form; free-form uses `dcl-f`)
+### F-spec: WORKSTN and DISK files (fixed-form; free-form uses `dcl-f`)
 
 File specs describe the files a program uses. Every F-spec is collected in `Program.files`, and `Program.file` is still the program's `WORKSTN` (display) file. `DISK` files are **Python port only so far**, and must be externally described (column 22 = `E`): their layout comes from a physical-file DDS (see "DISK Files" below and [`DDS_REFERENCE.md`](./DDS_REFERENCE.md)). The key is whatever the DDS says; the `K` in column 34 is read but the DDS decides.
 
 ### D-spec — standalone fields only
 
-Definition specs declare variables. Supported: standalone fields (`deftype` `S`) with a length, decimal positions, and an optional `INZ(...)` initial value. **Not supported:** data structures (`DS`) and their subfields, `LIKE`/`LIKEDS`, arrays (`DIM`), or prototypes (`PR`/`PI`). Most of a real program's variables don't even need a D-spec here — see "Externally-Described Files" below.
+Definition specs declare variables. Supported: standalone fields (`deftype` `S`) with a length, decimal positions, and an optional `INZ(...)` initial value. **Not supported in fixed-form:** data structures (`DS`) and their subfields, `LIKE`/`LIKEDS`, prototypes (`PR`/`PI`), and arrays: a `DIM` keyword is an error, not silently ignored. All of those exist in free-form (Python port). Most of a real program's variables don't even need a D-spec here, see "Externally-Described Files" below.
 
-### C-spec — fixed-form only
+### C-spec: fixed-form (free-form in the Python port)
 
-Calculation specs are the executable statements. Only fixed-form C-specs are parsed — free-form RPG (available from V5R1 onward) isn't, which is also why the example program's own header comment calls itself "V4R3-safe." A C-spec line captures indicators, factor 1, the opcode, and everything from column 36 onward as both a free-form expression (for `EVAL`/`IF`/`DOW`/`WHEN`) and fixed classic factor-2/result columns (for `DIV`/`MVR`-style ops) — see `src/rpgle.js`'s header comment for the exact column map.
+Calculation specs are the executable statements. In the JS and Go ports only fixed-form C-specs are parsed, which is why the original example program's header comment calls itself "V4R3-safe." The Python port also reads free-form source. Mixed source (`/free ... /end-free` blocks inside fixed-form) is not supported: a file is one or the other. A C-spec line captures indicators, factor 1, the opcode, and everything from column 36 onward as both a free-form expression (for `EVAL`/`IF`/`DOW`/`WHEN`) and fixed classic factor-2/result columns (for `DIV`/`MVR`-style ops), see `src/rpgle.js`'s header comment for the exact column map.
+
+### O-spec: refused
+
+Output specifications are how classic RPG describes printed output without a DDS. They are **an error**, not ignored: a program that quietly printed nothing would be worse than one that says so. Print with an externally described printer file instead (see "Printer Files").
 
 ## Externally-Described Files
 
@@ -75,12 +79,15 @@ Either way, the shape is the same plain data — no terminal protocol is involve
 | `BEGSR` / `ENDSR` / `EXSR` | Subroutine definition, return, call (its own tiny call stack) | `EXSR BUILDLOC` |
 | `EXFMT` | Write-then-read a DDS record format — see above | `EXFMT MAIN` |
 | `DIV` / `MVR` | Classic fixed-column integer divide, then remainder-of-last-DIV | `seed DIV 9973 quot` then `MVR seed` |
-| `RETURN` | Ends the program immediately | `RETURN` |
-
-| `CHAIN` `SETLL` `SETGT` `READ` `READE` `READP` `READPE` `WRITE` `UPDATE` `DELETE` | DISK file access (Python port) — see "DISK Files" below | `custno CHAIN CUSTMAST 71` |
+| `RETURN` | Ends the program (or the procedure, in free-form) | `RETURN` |
+| `ELSEIF` / `DOU` / `FOR` / `ITER` / `ENDFOR` | Free-form control flow, also reachable as fixed-form opcodes except `FOR`, which is free-form only | `FOR i = 1 TO 10` |
+| `CHAIN` `SETLL` `SETGT` `READ` `READE` `READP` `READPE` `WRITE` `UPDATE` `DELETE` | DISK file access and printing (Python port), see "DISK Files" and "Printer Files" | `custno CHAIN CUSTMAST 71` |
 | `KLIST` / `KFLD` | Names a composite key; `KFLD`'s field goes in the result column | `ORDK KLIST` |
+| `CALL` / `PARM` / `PLIST` | Calls another program, see "Calling Other Programs" | `CALL 'CUSTLOOKUP'` |
+| `CALLP` | Free-form procedure and program calls | `callp total(a : b)` |
+| `CLEAR` / `SORTA` | Blank or zero a variable, array or data structure; sort an array | `clear cust` |
 
-Anything else throws `Unsupported RPG opcode` at compile time, or `Unimplemented RPG instruction` at run time if it somehow got past compile. **Not supported at all:** `CALL`, arrays.
+Anything else throws `Unsupported RPG opcode` at compile time, or `Unimplemented RPG instruction` at run time if it somehow got past compile. **Not supported at all:** `CALLB`, `MOVE`/`MOVEL`, `Z-ADD`, `ADD`/`SUB`/`MULT` and the other classic arithmetic opcodes (use `EVAL`), `DSPLY`, `MONITOR`, `OPEN`/`CLOSE`, `TEST*`, `LOOKUP`, `XFOOT`, `SCAN`/`SUBST`/`CAT` (use the built-in functions).
 
 ## Free-Form RPG
 
@@ -241,7 +248,7 @@ rpgle run prog.rpgle -I ~/rpg/copybooks -D DEBUG
 
 ## Calling Other Programs
 
-*Python port only so far.* One program can call another by name. The called program is found by **lookup**, not registration: `rpgle` looks for `custlookup.rpgle` (then `.rpg`, `.sqlrpgle`) in the calling program's folder, then in the main program's folder, then in each `-I` folder. A library prefix (`'MYLIB/CUSTLOOKUP'`) is accepted and ignored, since there are folders here, not libraries. A program name is an IBM i object name, never a path, so a call can't reach outside the folders it searches.
+*Python port only so far.* One program can call another by name. The called program is found by **lookup**, not registration: `rpgle` looks for `custlookup.rpgle` (then `.rpg`, `.sqlrpgle`) in the calling program's folder, then in the main program's folder, then in each `-I` folder. A library prefix (`'MYLIB/CUSTLOOKUP'`) is accepted and ignored, since there are folders here, not libraries. A program name is an IBM i object name, never a path, so a call can't reach outside the folders it searches. File names (`dcl-f`, F-specs) follow the same rule, because each becomes a file on disk (`custmast.pf`, `custrpt.prtf`): letters, digits and `_ $ # @`, no dots or slashes.
 
 ```
 // the caller                              // custlookup.rpgle, the called program
@@ -388,11 +395,15 @@ RPG indicators are named boolean flags, tracked separately from ordinary variabl
 
 ### Numbered indicators (`*INnn`)
 
-Two-digit indicators (`*IN90`, `*IN03`, ...) — set with `EVAL *in90 = *on`/`*off`, tested in any expression, and used by DDS to conditionally show/hide fields (see [`DDS_REFERENCE.md`](./DDS_REFERENCE.md)).
+Two-digit indicators (`*IN90`, `*IN03`, ...), set with `EVAL *in90 = *on`/`*off`, tested in any expression, and used by DDS to conditionally show/hide fields (see [`DDS_REFERENCE.md`](./DDS_REFERENCE.md)). In fixed-form, columns 9-11 of a C-spec condition it on an indicator (`71`, `N71`, `LR`, or an overflow indicator), and columns 71-76 receive an opcode's resulting indicators.
+
+### Overflow indicators (`*INOA`-`*INOG`, `*INOV`)
+
+The indicators a printer file's `OFLIND` names, usually `*INOF`. They are set on when a record reaches the overflow line, and the program turns them off. See "Printer Files". (Python port.) Each program, including each program it calls, has its own set of indicators.
 
 ### `*INLR` / `*INRT`
 
-`*INLR` ("last record") signals normal end-of-program when set on — real RPG uses it to tell the runtime not to keep the program active for the next call. This library's interpreter doesn't currently act on it directly (a program still ends via `RETURN`), but it's tracked and testable like any other indicator, since example content sets it before returning, matching real RPG convention. `*INRT` ("return") is tracked the same way but isn't used by any shipped content.
+`*INLR` ("last record") means "this program is finished": set on, the runtime closes the program, and the next call starts it afresh. Left off, a called program stays active and keeps its variables and file positions for its next call. For the main program, which just ends, it makes no difference. For a program that is *called* (Python port), it decides whether the program is kept: see "Calling Other Programs". It's an ordinary indicator otherwise, set with `*inlr = *on`. `*INRT` ("return") is tracked the same way but isn't used by any shipped content.
 
 ### Response indicators (`CFnn`/`CAnn`) and the reset-on-read rule
 
@@ -407,16 +418,23 @@ When `EXFMT` resumes, the interpreter first resets every indicator the *current 
 ```
 expr       := orExpr
 orExpr     := andExpr (OR andExpr)*
-andExpr    := compare (AND compare)*
+andExpr    := notExpr (AND notExpr)*
+notExpr    := NOT notExpr | compare            (Python port; looser than comparison, tighter than AND)
 compare    := additive ((= | <> | <= | >= | < | >) additive)?
 additive   := term ((+ | -) term)*
 term       := unary ((* | /) unary)*
 unary      := '-' unary | primary
 primary    := NUMBER | STRING | '*ON' | '*OFF'
-            | '*IN' DIGIT DIGIT | '*INLR'
+            | '*IN' DIGIT DIGIT | '*INLR' | '*INOA'..'*INOG' | '*INOV'
+            | '*BLANKS' | '*ZEROS'
             | '%' NAME '(' expr (':' expr)* ')'
-            | NAME | '(' expr ')'
+            | NAME                              a variable, or ds.subfield
+            | NAME '(' expr ')' ('.' NAME)?     an array element, or arr(i).subfield
+            | NAME '(' expr (':' expr)* ')'     a procedure call
+            | '(' expr ')'
 ```
+
+The JS and Go grammars stop at the `*IN` forms and the `%` functions: no `NOT`, no figurative constants beyond `*ON`/`*OFF`, and no subscripts or calls, since those ports have no arrays, data structures or procedures.
 
 ### Built-in functions
 
@@ -441,7 +459,7 @@ Text and numbers don't mix: `'a' + 1` is an error, not a silent NaN. Convert wit
 
 ### Figurative constants
 
-`*ON`, `*OFF`, `*INnn`, `*INLR`, `*INRT`. Any other `*XXX` throws `Unsupported RPG figurative constant`.
+`*ON`, `*OFF`, `*INnn`, `*INLR`, `*INRT` in all three ports. The Python port adds `*BLANK`/`*BLANKS` (empty text, which pads to the field's length on assignment), `*ZERO`/`*ZEROS`, `*LOVAL`/`*HIVAL` as file keys, and the overflow indicators. Any other `*XXX` throws `Unsupported RPG figurative constant`.
 
 ### Why AND/OR always evaluate both operands
 
@@ -453,7 +471,14 @@ RPG has no `%REM` built-in until well past V4R3. The classic, unambiguous way to
 
 ## What's Explicitly Out of Scope
 
-Arrays, data structures (`DS`), `CALL`/prototypes, free-form RPG and DISK file I/O in the JS and Go ports, subfiles and windows in DDS, DDS keyword continuation lines, OR'd/multi-line indicator conditions. None of this is an oversight — it's the boundary of what the shipped example content needs, documented here instead of silently missing.
+Nothing here is an oversight: each is documented where it matters, and each is an **error rather than a silent skip** wherever a program could otherwise run and give a wrong answer.
+
+- **Whole areas:** system APIs, CL, data areas and data queues, job and spool-queue behavior, ILE binding and service programs (`extproc`), activation groups, commitment control, SQL (`EXEC SQL`), and record locking.
+- **Source forms:** O-specs and program-described files, mixed fixed-and-free source, `/IF` conditions other than `DEFINED`, `**CTDATA` compile-time arrays.
+- **Language:** `MONITOR`/`ON-ERROR` and `%ERROR`, the `(E)` opcode extender, `DSPLY`, date, time and timestamp types, pointers, `%EDITC`/`%EDITW`/`%XLATE`, `*OMIT`, `%PARMS`, procedures taking data structures as parameters, arrays inside data structures.
+- **Files:** subfiles and windows in display DDS, DDS keyword continuation lines, OR'd and multi-line indicator conditions, `DESCEND` keys, joined and select/omit logical files, `READC`, user-controlled open/close.
+- **Printing:** overprinting (`SPACEA(0)`), `DATE`/`TIME`/`USER`/`SYSNAME` fields, `EDTWRD`, edit codes outside the supported set, barcodes.
+- **The JS and Go ports** have none of the Python runtime (free-form, files, includes, calls, printing, the built-in functions beyond three). See the root README's "Status by language".
 
 ## See Also
 

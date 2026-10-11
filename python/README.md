@@ -1,6 +1,6 @@
 # rpgle (Python)
 
-A zero-dependency RPG IV (RPGLE) and DDS parser/interpreter for Python.
+A zero-dependency RPG IV (RPGLE) and DDS interpreter for Python, with a command line. It runs fixed-form and free-form RPG programs with screens, DISK files (on SQLite), `/COPY` includes, calls between programs and printed reports, on any machine, with no IBM i.
 
 ```bash
 pip install rpgle_library
@@ -76,21 +76,29 @@ The JS port's `runProgram()` is a generator: it `yield`s at every `EXFMT` and re
 
 Parses DDS display-file source. `DDS.formats` is `dict[str, Format]`; `DDS.format_order` preserves source order, which `build_vars`' "first definition wins" rule depends on.
 
-### `parse_rpgle(source: str) -> Program`
+### `parse_rpgle(source: str, path: Path | None = None, include_dirs=None, defines=()) -> Program`
 
-Tokenizes fixed-form RPG IV source into `Program(file, dspecs, statements)`.
+Parses RPG IV source into `Program(file, files, dspecs, dss, procs, protos, main_params, statements)`. Source starting with `**FREE` is free-form; anything else is fixed-form. `/COPY` and `/INCLUDE` are expanded first: `path` is the file the source came from (where includes are looked for first), `include_dirs` are further folders to search, and `defines` pre-defines names for `/IF DEFINED`. Errors inside a copy member name the member and its line.
 
-### `build_vars(prog: Program, dds: DDS) -> dict[str, Var]`
+### `build_vars(prog: Program, dds: DDS, pfs=None, prtfs=None) -> dict[str, Var]`
 
-Builds the program's variable table from DDS-bound fields and D-spec standalone fields.
+Builds the program's variable table: fields of the display file, of each DISK file (`pfs`) and printer file (`prtfs`), data structure subfields, arrays, and D-spec / `dcl-s` fields. `Var` is one value with a length and decimals; `ArrayVar` is a list of them (or, for an array of data structures, of `{subfield: Var}` dicts).
 
 ### `compile_program(statements) -> Compiled`
 
 Compiles a flat statement list into a jump-resolved instruction array. Most callers won't call this directly — `run_program` does it internally. Named `compile_program`, not `compile`, to avoid shadowing Python's `compile` builtin — the one deliberate naming deviation from the JS/Go ports' `compile()`/`Compile()`.
 
-### `run_program(prog: Program, dds: DDS, db: Database | None = None, pfs: dict[str, PhysicalFile] | None = None) -> Generator[ScreenData, Resume, None]`
+### `run_program(prog, dds, db=None, pfs=None, loader=None, spool=None) -> Generator[ScreenData, Resume, None]`
 
-Runs the program. Yields a `ScreenData` at every `EXFMT`, resumes with `.send(resume)`. A program with `DISK` files also needs `db` (a `Database`, SQLite) and `pfs` (upper-case file name to `PhysicalFile`, from `parse_pf`). Changes are committed when the program ends. See [`../docs/LANGUAGE.md`](../docs/LANGUAGE.md) "DISK Files".
+Runs the program. Yields a `ScreenData` at every `EXFMT`, resumes with `.send(resume)`. What else you pass depends on what the program uses:
+
+| The program uses | Pass | Notes |
+|---|---|---|
+| `DISK` files | `db` (a `Database`) and `pfs` (upper-case file name to `PhysicalFile`; `load_pfs(prog, [folder])` builds it from `<file>.pf`) | Changes are committed when the program ends |
+| calls to other programs | `loader` (a `ProgramLoader`) | Finds each called program by name in its folders |
+| printer files | `spool` (a `Spool`) | Collects the printed output; read it with `spool.outputs()` |
+
+Everything the program is allowed to do is documented in [`../docs/LANGUAGE.md`](../docs/LANGUAGE.md).
 
 | `ScreenData` field | Type | Meaning |
 |---|---|---|
@@ -128,6 +136,49 @@ eval_expr("1 < 2 and 3 < 4", ctx)   # True
 eval_expr("%TRIM('  hi  ')", ctx)   # 'hi'
 ```
 
+### Files, calls and printing from Python
+
+```python
+from pathlib import Path
+from rpgle import Database, ProgramLoader, Spool, load_pfs, parse_dds, parse_rpgle, run_program
+
+path = Path("programs/custreport.rpgle")
+prog = parse_rpgle(path.read_text(), path=path)
+
+db = Database("shop.db")                              # SQLite; Database() is in-memory
+pfs = load_pfs(prog, [path.parent])                   # custmast.pf -> the CUSTMAST file's layout
+loader = ProgramLoader([path.parent], main=path)      # for CALLs
+spool = Spool(directories=[path.parent])              # for printer files (66-line pages, overflow at 60)
+
+for screen in run_program(prog, parse_dds(""), db, pfs, loader, spool):
+    ...                                               # one ScreenData per EXFMT; none for this report
+for name, text in spool.outputs():                    # [("custrpt", "...text with \f between pages...")]
+    print(name, text)
+db.close()
+```
+
+The pieces, each in its own module so you can use one without the others:
+
+| Module | What it is |
+|---|---|
+| `rpgle.py`, `freeform.py` | the fixed-form and free-form parsers; both produce the same records |
+| `include.py` | `/COPY`, `/INCLUDE` and `/IF DEFINED` expansion (`expand_includes`) |
+| `interpreter.py` | the compiler (`compile_program`) and the run loop, one frame per call |
+| `expr.py` | the expression evaluator and built-in functions; `Var` and `ArrayVar` |
+| `dds.py`, `pf.py`, `prtf.py` | DDS parsers for display, physical and printer files |
+| `database.py`, `fileops.py` | `Database` (SQLite) with RPG's keyed access, and the opcodes that drive it |
+| `loader.py` | `ProgramLoader`: finding, parsing and caching called programs |
+| `spool.py` | `Spool` and the printer page layout |
+| `cli.py` | the `rpgle` command |
+
+---
+
+## Trust model
+
+Running an RPG program is running code someone wrote: it can read and write the database you point it at, write spool files where you tell it, and read files in its own folder. Only run source you trust, as you would any script.
+
+What the library does guard against is a program reaching *outside* its folder through the names it uses. File and program names must be IBM i object names (no `/`, no `..`, no dots), and a `/COPY` or `CALL` can only resolve inside the program's own folder or an `-I` folder you named (a symlink out is refused). The `rpgle` command opens only the `--db` file you give it. Malformed source gets an error that names the problem; it was fuzzed with more than two million malformed inputs during development (a smaller deterministic run is `tests/test_fuzz.py`) so that nothing but an `RpgleError` comes out, and a Python traceback from bad input is a bug worth reporting.
+
 ---
 
 ## Testing
@@ -136,7 +187,7 @@ eval_expr("%TRIM('  hi  ')", ctx)   # 'hi'
 python -m unittest discover -s tests -v
 ```
 
-Same reasoning as the Go port's black-box-only test package: this package is almost entirely pure, already-exported functions, so there's little internal machinery worth reaching around the public API to test directly.
+The suite (a few hundred tests) is mostly black-box: it drives the public API, building fixed-form lines by column (`tests/_cols.py`) so a misplaced space can't hide in a hand-counted string, and it runs the shipped example programs through the real command line. CI runs it on Python 3.12 and 3.13.
 
 ---
 

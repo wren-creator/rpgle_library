@@ -1,6 +1,6 @@
 # rpgle_library
 
-A zero-dependency RPG IV (RPGLE) and DDS parser/interpreter, for JS, Go, and Python.
+A zero-dependency RPG IV (RPGLE) and DDS parser/interpreter, for JS, Go, and Python. **The Python port is a working runtime**: it runs RPG programs, with files, reports, free-form source and calls between programs, on any machine with no IBM i. The JS and Go ports are the original core (screens and calculations). See [Status by language](#status-by-language).
 
 ```
 npm install rpgle_library
@@ -17,6 +17,58 @@ RPG IV is a mature, stable language powering thousands of IBM i installations wo
 This library aims to be a living, documented reference implementation — not just working code, but code that explains *why* at every step, so the knowledge survives.
 
 See [`docs/`](./docs/) for the companion glossary and language/DDS reference.
+
+---
+
+## What you can run today
+
+The Python port runs fixed-form and free-form RPG IV programs from the command line against a local SQLite database:
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate && pip install -e python
+rpgle load programs/custmast.pf programs/custmast.csv --db shop.db      # fill a DISK file from a CSV
+rpgle run programs/custinq.rpgle --db shop.db                           # a 5250-style screen, a CHAIN, a not-found indicator
+rpgle run programs/custreport.rpgle --db shop.db                        # a printed report with page breaks and totals
+```
+
+| Example program | What it shows | Run it with |
+|---|---|---|
+| `adventure.rpgle` + `.dspf` | a text game: screens, subroutines, `DIV`/`MVR` | `rpgle run programs/adventure.rpgle` |
+| `sales-report.rpgle` + `.dspf` | calculations and one screen | `rpgle run programs/sales-report.rpgle` |
+| `custinq.rpgle` + `custmast.pf` | fixed-form: a keyed file, `CHAIN`, indicators | `rpgle run programs/custinq.rpgle --db shop.db` |
+| `custinq-free.rpgle` | the same, free-form | add `--dspf programs/custinq.dspf` |
+| `custinq-copy.rpgle` | file declarations moved into a copybook (`/COPY`) | add `--dspf programs/custinq.dspf` |
+| `custinq-call.rpgle` + `custlookup.rpgle` | one program calling another by name | add `--dspf programs/custinq.dspf` |
+| `custreport.rpgle` + `custrpt.prtf` | a printer file: headings, page breaks, edit codes | `--page-length 8 --overflow-line 6` shows the paging |
+
+The honest pitch: run, test and port RPG logic anywhere, not replace IBM i. System APIs, CL, data areas, job and spool behavior, and ILE binding are out of scope.
+
+## Status by language
+
+| | JS | Go | Python |
+|---|---|---|---|
+| Fixed-form parser, `EXFMT`, core opcodes, DDS display files | yes | yes | yes |
+| `rpgle` command line | no | no | yes |
+| Free-form (`**FREE`): declarations, loops, procedures, data structures, arrays | no | no | yes |
+| `DISK` files on SQLite: `CHAIN`, `READ`, `SETLL`, `WRITE`, `UPDATE`, `DELETE` | no | no | yes |
+| `/COPY` and `/INCLUDE` | no | no | yes |
+| Calls between programs (`CALL`/`PARM`, `extpgm`) | no | no | yes |
+| Printer files and edit codes | no | no | yes |
+| Built-in functions beyond `%TRIM`, `%LEN`, `%SUBST` | no | no | yes |
+
+### Port parity: known differences
+
+`docs/PUBLISHING.md` says the three ports should behave identically for any input all three support. That is **no longer fully true**. While building the Python runtime, these behaviors were corrected in Python only, and the JS and Go ports still have the old behavior:
+
+| Behavior | Python | JS and Go |
+|---|---|---|
+| Comparing character values | ignores trailing blanks, as RPG does (`name = 'BOB'` is true for `BOB` plus padding) | compares exactly, so a padded field never equals a literal |
+| `+` and `-` on text | `+` joins two texts; text with a number, or `-` on text, is an error that says to use `%CHAR` or `%DEC` | JS: `+` joins, and `'a' + 1` is `"a1"`; `'a' - 'b'` is `NaN`. Go: any of these is `NaN`, even `'a' + 'b'` |
+| Showing a number with decimals on a screen | with a decimal point (`0000048.75`) so it survives being typed back in | rounded to a whole number |
+| `EXFMT` format name | case-insensitive | case-sensitive |
+| Unsupported source (`DIM` in a fixed-form D-spec, O-specs) | an error | ignored silently |
+
+I checked each row against the JS and Go ports directly (not from memory). Porting these fixes to JS and Go is on the roadmap below. Until then, treat the Python port as the reference for these behaviors.
 
 ---
 
@@ -131,12 +183,14 @@ Full detail: [`docs/LANGUAGE.md`](./docs/LANGUAGE.md).
 
 | Feature | Supported | Notes |
 |---|---|---|
-| Record formats, named fields, constants | Yes | WORKSTN display files only |
+| Record formats, named fields, constants | Yes | WORKSTN display files |
+| Physical files (record format, fields, `K` key lines, `UNIQUE`) | Python only | `DESCEND` keys are an error. See [`docs/DDS_REFERENCE.md`](./docs/DDS_REFERENCE.md) |
+| Printer files (`SKIPB`/`SKIPA`/`SPACEB`/`SPACEA`, line and position, `EDTCDE`, `PAGNBR`) | Python only | See [`docs/DDS_REFERENCE.md`](./docs/DDS_REFERENCE.md) |
 | `CFnn`/`CAnn` | Yes | |
 | Single `N?nn` indicator conditioning per line | Yes | |
 | OR'd / multi-line ANDed indicators | No | |
 | Subfiles, windows | No | |
-| Other display keywords (`DSPATR`, `EDTCDE`, `COLOR`, ...) | No | |
+| Other display keywords (`DSPATR`, `COLOR`, ...) | No | `EDTCDE` works on printer files |
 
 Full detail: [`docs/DDS_REFERENCE.md`](./docs/DDS_REFERENCE.md).
 
@@ -197,6 +251,8 @@ Goal: run and test RPG IV logic on Linux, macOS or Windows, with no IBM i licens
   - [x] 4c. `CALL` between programs: same-folder lookup, `dcl-pr extpgm` and `CALL`/`PARM`/`PLIST`/`*ENTRY`, retained state when `*INLR` is off
   - [x] 4d. `PRINTER` files: externally described, page layout, overflow, edit codes, spool output
 
+- [ ] **5. Port parity.** Bring the behavior fixes above to the JS and Go ports, then decide which of the Python runtime features are worth porting
+
 This will not be a drop-in replacement for the IBM compiler. System APIs, CL, data areas, job and spool behavior, and ILE binding are out of scope. The pitch is run, test and port RPG logic anywhere, not replace IBM i.
 
 ## Publishing
@@ -205,10 +261,12 @@ See [`docs/PUBLISHING.md`](./docs/PUBLISHING.md).
 
 ## Documentation
 
-- [`docs/LANGUAGE.md`](./docs/LANGUAGE.md) — the RPGLE language subset, compile phases, opcodes, indicators, expression grammar
-- [`docs/DDS_REFERENCE.md`](./docs/DDS_REFERENCE.md) — the DDS subset, column layout, keyword support
-- [`docs/GLOSSARY.md`](./docs/GLOSSARY.md) — RPG/DDS terminology and background
-- [`docs/PUBLISHING.md`](./docs/PUBLISHING.md) — release process
+- [`CHANGELOG.md`](./CHANGELOG.md): everything that changed since 1.0.0, including behavior corrections
+- [`python/README.md`](./python/README.md): the Python API, the `rpgle` command and the module map
+- [`docs/LANGUAGE.md`](./docs/LANGUAGE.md): the RPGLE language subset, compile phases, opcodes, indicators, expression grammar
+- [`docs/DDS_REFERENCE.md`](./docs/DDS_REFERENCE.md): the DDS subset, column layout, keyword support
+- [`docs/GLOSSARY.md`](./docs/GLOSSARY.md): RPG/DDS terminology and background
+- [`docs/PUBLISHING.md`](./docs/PUBLISHING.md): release process
 
 ## License
 

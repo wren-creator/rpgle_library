@@ -2,6 +2,8 @@
 
 A zero-dependency RPG IV (RPGLE) and DDS parser/interpreter for Go.
 
+> **Scope:** this port is the original core: fixed-form parsing, `EXFMT`, the core opcodes and display-file DDS. The Python port has grown into a full runtime (free-form, files, calls, printing). See the root README's "Status by language" and "Port parity" for exactly what differs.
+
 ```bash
 go get github.com/wren-creator/rpgle_library/go
 ```

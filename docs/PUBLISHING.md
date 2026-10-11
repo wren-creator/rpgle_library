@@ -41,7 +41,7 @@ npm version major   # 1.0.0 → 2.0.0  (breaking changes)
 git push origin main --tags
 ```
 
-The GitHub Actions workflow (`.github/workflows/ci.yml`) runs tests on Node 18/20/22 and `go test ./go/...` on every push and PR. The publish step (npm) is included in the same file but commented out until the `NPM_TOKEN` secret above is configured — uncomment it once you're ready to publish automatically on tag push.
+The GitHub Actions workflow (`.github/workflows/ci.yml`) runs `npm test` on Node 22 and 24, `go test` and `go vet` for the Go module, and the Python tests (`python -m unittest discover -s tests`) on Python 3.12 and 3.13, on every push and PR. The publish step (npm) is included in the same file but commented out until the `NPM_TOKEN` secret above is configured; uncomment it once you're ready to publish automatically on tag push.
 
 ## Releasing a New Version (Go)
 
@@ -96,3 +96,7 @@ This library follows [Semantic Versioning](https://semver.org/):
 - **Major** — breaking changes to the public API (function signatures, the EXFMT yield/resume shape, exports)
 
 The JS, Go, and Python implementations are meant to behave identically for any input all three support. A behavior change in one that isn't mirrored in the others should be treated as a bug, not shipped as a version bump in only one language.
+
+**Where that stands today:** the Python port has grown a full runtime (free-form RPG, files, calls, printing) that JS and Go don't have, and a handful of behaviors were corrected in Python only. The list is in the root README under "Port parity: known differences", and porting the fixes is roadmap item 5. Until it's done, don't describe a release as "all three ports behave the same"; describe the Python port's extra features as Python-only, as the docs do.
+
+**Releasing the Python port on its own.** Python's `pyproject.toml` version currently matches JS and Go (1.0.0). The Python port has gained a great many features (new opcodes, new DDS support, new API) that under the policy above are a **minor** bump at least. Because the JS and Go ports are unchanged, decide before publishing whether to bump all three together or to let Python lead. The package metadata says `requires-python >= 3.9`; CI exercises 3.12 and 3.13, and nothing older has been tested.
