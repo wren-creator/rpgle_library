@@ -2,9 +2,17 @@
 
 Versions follow [`docs/PUBLISHING.md`](./docs/PUBLISHING.md). Everything below is in the **Python port** unless it says otherwise; the JS and Go ports are unchanged since 1.0.0 (their parity work is listed under "Coming to the JS and Go ports" in the README). See "Status by language" and "Port parity" in the [README](./README.md).
 
+## Unreleased (Python)
+
+A patch release (1.1.1) once published.
+
+### Fixed
+
+- A key or record value for a `DISK` file follows the same rule as typing into a number field. Text that isn't a number (`'abc'`) used to escape as a raw `ValueError` instead of a clean error, and a blank number key crashed the same way; a blank now reads as zero. A number used as a character key reads the way RPG shows it, so `CHAIN 20` finds the key `20`, not `20.0`.
+
 ## Unreleased (JS and Go)
 
-Behavior fixes, brought over from the Python port so all three agree. Bug fixes, so the next release of each is a patch (1.0.1). Each is covered by tests that mirror the Python ones, and `tools/parity/check.py` (new, and run in CI) checks the three ports against the same 119 cases.
+Behavior fixes, brought over from the Python port so all three agree, and then `DISK` files. Together that is new API with nothing broken, so the next release of each is a minor one (1.1.0). Each is covered by tests that mirror the Python ones, and `tools/parity/check.py` (new, and run in CI) checks the three ports against the same 119 cases.
 
 ### Fixed
 
@@ -20,9 +28,12 @@ Behavior fixes, brought over from the Python port so all three agree. Bug fixes,
 - Numbers become text as every digit when whole and the shortest round-trip digits otherwise, never in exponent form, in all three ports. Go printed whole numbers past 9.2e18 incorrectly (it went through a 64-bit integer).
 - A stray `ELSE`, `ENDIF`, `ENDDO`, `LEAVE`, `WHEN`, `OTHER` or `ENDSL` is a clean error (it crashed JS with a `TypeError`), and a `DOW`, `IF` or `SELECT` left open is a compile error naming it (both ports compiled it and crashed later).
 - JS no longer crashes when resumed with nothing (`gen.next()`).
+- Conditioning indicators (columns 9 to 11) are honored. Both ports read them and then ignored them, so `C   71   EVAL ...` ran whether or not indicator 71 was on. One on a block-structure op (`IF`, `DOW`, `SELECT`, ...) is an error, since skipping it would break the jumps, and one that isn't `nn`, `Nnn` or `LR` is an error too.
+- A file name that isn't an object name (`../x`, `a/b`) is an error, as in the Python port, so a file name can never be a path.
 
 ### Added
 
+- **`DISK` files on SQLite**, with the Python port's keyed-access model and its tests: `CHAIN`, `SETLL`, `SETGT`, `READ`, `READE`, `READP`, `READPE`, `WRITE`, `UPDATE`, `DELETE`, `KLIST`/`KFLD`, `%EOF`, `%FOUND` and `%EQUAL`, with resulting indicators in columns 71 to 76. Physical-file DDS is parsed by `parsePf` (JS) and `ParsePF` (Go), and every F-spec is now collected (`files`/`Files`; `file` is still the first `WORKSTN` one). SQLite stays out of the core: JS loads `better-sqlite3` (an optional peer dependency, Node 20 or newer) the first time a `Database` is created, and Go keeps `modernc.org/sqlite` v1.34.5, pure Go, in the separate `sqlitedb` package. New entry points: `runProgram(rpg, dds, { db, pfs })` (JS), `RunWith(prog, dds, RunOptions{DB, PFs})` and `BuildVarsWith` (Go). Examples: `examples/customer-inquiry.js` and `go/examples/customer-inquiry`. 98 parity cases run whole programs against seeded tables and compare every table afterward.
 - **The built-in functions.** JS and Go had three (`%TRIM`, `%LEN`, `%SUBST`); they now have all twenty core functions the Python port has: `%TRIML`, `%TRIMR`, `%UPPER`, `%LOWER`, `%SCAN`, `%REPLACE`, `%CHAR`, `%DEC`, `%DECH`, `%INT`, `%INTH`, `%ABS`, `%SQRT`, `%REM`, `%DIV`, `%MIN`, `%MAX`. Also the `NOT` operator and the `*BLANKS` and `*ZEROS` constants. Go's are in the new `bifs.go`. `tools/parity/check.py` runs about 160 cases of them through all three ports, and mutation testing confirms it catches a break in any one function in any one port.
 - `numericFields` (JS) / `NumericFields` (Go) on the screen data: the input fields that hold numbers, so a front end can refuse letters as they are typed.
 

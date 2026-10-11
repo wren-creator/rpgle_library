@@ -1,6 +1,6 @@
 # rpgle_library
 
-A zero-dependency RPG IV (RPGLE) and DDS parser/interpreter, for JS, Go, and Python. **The Python port is a working runtime**: it runs RPG programs, with files, reports, free-form source and calls between programs, on any machine with no IBM i. The JS and Go ports are the original core (screens and calculations). See [Status by language](#status-by-language).
+An RPG IV (RPGLE) and DDS parser/interpreter, for JS, Go, and Python. The core has no dependencies; keyed `DISK` files add SQLite (built into Python, `better-sqlite3` for JS, `modernc.org/sqlite` for Go) and only load if your program uses them. **The Python port is a working runtime**: it runs RPG programs, with files, reports, free-form source and calls between programs, on any machine with no IBM i. The JS and Go ports have screens, calculations, the built-in functions and `DISK` files, and are catching up on the rest. See [Status by language](#status-by-language).
 
 ```
 npm install rpgle_library
@@ -41,6 +41,8 @@ rpgle run programs/custreport.rpgle --db shop.db                        # a prin
 | `custinq-call.rpgle` + `custlookup.rpgle` | one program calling another by name | add `--dspf programs/custinq.dspf` |
 | `custreport.rpgle` + `custrpt.prtf` | a printer file: headings, page breaks, edit codes | `--page-length 8 --overflow-line 6` shows the paging |
 
+JS and Go run the keyed-file program too, from their own examples: `node examples/customer-inquiry.js`, or `cd go/examples/customer-inquiry && go run .` (try customer `20`, then `99`, then `f3`). They have no command line yet, so the examples are the runner.
+
 The honest pitch: run, test and port RPG logic anywhere, not replace IBM i. System APIs, CL, data areas, job and spool behavior, and ILE binding are out of scope.
 
 ## Status by language
@@ -50,20 +52,22 @@ The honest pitch: run, test and port RPG logic anywhere, not replace IBM i. Syst
 | Fixed-form parser, `EXFMT`, core opcodes, DDS display files | yes | yes | yes |
 | `rpgle` command line | no | no | yes |
 | Free-form (`**FREE`): declarations, loops, procedures, data structures, arrays | no | no | yes |
-| `DISK` files on SQLite: `CHAIN`, `READ`, `SETLL`, `WRITE`, `UPDATE`, `DELETE` | no | no | yes |
+| `DISK` files on SQLite: `CHAIN`, `READ`, `SETLL`, `WRITE`, `UPDATE`, `DELETE`, `KLIST`/`KFLD` | yes | yes | yes |
+| Conditioning indicators (columns 9 to 11) | yes | yes | yes |
 | `/COPY` and `/INCLUDE` | no | no | yes |
 | Calls between programs (`CALL`/`PARM`, `extpgm`) | no | no | yes |
 | Printer files and edit codes | no | no | yes |
 | The 20 core built-in functions (`%TRIM`, `%CHAR`, `%SCAN`, `%DEC`, ...), `NOT`, `*BLANKS`/`*ZEROS` | yes | yes | yes |
-| File-status and array functions (`%EOF`, `%FOUND`, `%ELEM`, `%LOOKUP`) | no | no | yes |
+| File-status functions (`%EOF`, `%FOUND`, `%EQUAL`) | yes | yes | yes |
+| Array functions (`%ELEM`, `%LOOKUP`) | no | no | yes |
 
 ### Python versions
 
-The Python port **requires Python 3.12 or newer** and is **tested on 3.12, 3.13 and 3.14**: the same test suite runs on all three in CI. Version 1.1.0. The JS port declares Node 16 or newer in `package.json` and CI tests it on Node 22 and 24; the Go module declares Go 1.21 and CI tests it there.
+The Python port **requires Python 3.12 or newer** and is **tested on 3.12, 3.13 and 3.14**: the same test suite runs on all three in CI. Version 1.1.0. The JS port declares Node 16 or newer in `package.json` and CI tests it on Node 22 and 24; the Go module declares Go 1.21 and CI tests it there. `DISK` files need more than the core does: in JS, `better-sqlite3` (an optional peer dependency you install yourself) wants Node 20 or newer; in Go, the `sqlitedb` package pulls in `modernc.org/sqlite` v1.34.5, the newest release that still builds on Go 1.21 (it is pure Go, no cgo). A program that declares no `DISK` files never loads either.
 
 ### Port parity
 
-`docs/PUBLISHING.md` says the three ports behave identically for any input all three support, and that is now **checked, not just promised**. `python3 tools/parity/check.py` runs the same cases (expressions, text and number rules, screen text, how source parses, which blocks compile, what happens when you type into a number field) through Python, JS and Go and compares the results. All of them agree, CI runs it on every push, and it was verified by breaking each port in turn and watching it catch the break.
+`docs/PUBLISHING.md` says the three ports behave identically for any input all three support, and that is now **checked, not just promised**. `python3 tools/parity/check.py` runs the same cases (expressions, text and number rules, screen text, how source parses, which blocks compile, what happens when you type into a number field, and what whole programs leave behind in their `DISK` files) through Python, JS and Go and compares the results. All of them agree, CI runs it on every push, and it was verified by breaking each port in turn and watching it catch the break.
 
 Earlier versions of this README listed five behaviors where JS and Go differed from Python. They have been brought into line, in both ports, with tests:
 
@@ -112,26 +116,26 @@ const dds = parseDds(dspfSource);
 console.log(Object.keys(dds.formats));   // ['MAIN', 'COMBAT', 'ENDGAME']
 ```
 
-### `parseRpgle(source) -> { file, dspecs, statements }`
+### `parseRpgle(source) -> { file, files, dspecs, statements }`
 
-Tokenizes fixed-form RPG IV source into F-spec/D-spec/C-spec records, in source order. See [`docs/LANGUAGE.md`](./docs/LANGUAGE.md) for the supported subset.
+Tokenizes fixed-form RPG IV source into F-spec/D-spec/C-spec records, in source order. `files` holds every F-spec; `file` is the first `WORKSTN` one. Each statement also carries its conditioning indicator and its resulting indicators (columns 71 to 76). See [`docs/LANGUAGE.md`](./docs/LANGUAGE.md) for the supported subset.
 
 ```javascript
 const rpg = parseRpgle(rpgleSource);
 console.log(rpg.file.device);   // 'WORKSTN'
 ```
 
-### `buildVars(rpgAst, ddsFormats) -> vars`
+### `buildVars(rpgAst, ddsFormats, pfs) -> vars`
 
-Builds the program's variable table: every named DDS field across every record format, plus D-spec standalone fields. See "Externally-Described Files" in [`docs/LANGUAGE.md`](./docs/LANGUAGE.md).
+Builds the program's variable table: every named DDS field across every record format, then the fields of each `DISK` file's record format (`pfs` is optional), plus D-spec standalone fields. See "Externally-Described Files" in [`docs/LANGUAGE.md`](./docs/LANGUAGE.md).
 
-### `compile(statements) -> { instrs, subroutines }`
+### `compile(statements) -> { instrs, subroutines, klists }`
 
 Compiles a flat C-spec statement list into a jump-resolved instruction array. Most callers won't call this directly — `runProgram()` does it internally — but it's exported for anyone who wants to inspect the compiled form.
 
-### `runProgram(rpgAst, ddsFormats) -> Generator`
+### `runProgram(rpgAst, ddsFormats, { db, pfs }) -> Generator`
 
-Runs the program. Yields at every `EXFMT`, resumes with `.next(resume)`.
+Runs the program. Yields at every `EXFMT`, resumes with `.next(resume)`. The options are only needed for `DISK` files: `db` is a `Database` and `pfs` maps each upper-case file name to what `parsePf` returned.
 
 | Yielded value | Shape |
 |---|---|
@@ -177,12 +181,13 @@ evalExpr("%TRIM('  hi  ')", { vars: {}, indicators: {} });   // 'hi'
 | Standalone D-spec fields (`S`), `INZ` | Yes | |
 | Data structures, `LIKE`, prototypes | Free-form, Python only | |
 | Arrays (`dim`), `%elem`, `%lookup`, `sorta`, arrays of data structures | Free-form, Python only | Fixed-form `DIM` raises an error |
-| DISK file I/O: `CHAIN`, `SETLL`, `SETGT`, `READ`, `READE`, `READP`, `READPE`, `WRITE`, `UPDATE`, `DELETE`, `KLIST`/`KFLD`, `%EOF`/`%FOUND`/`%EQUAL` | Python only | Backed by SQLite. See [`docs/LANGUAGE.md`](./docs/LANGUAGE.md) |
+| DISK file I/O: `CHAIN`, `SETLL`, `SETGT`, `READ`, `READE`, `READP`, `READPE`, `WRITE`, `UPDATE`, `DELETE`, `KLIST`/`KFLD`, `%EOF`/`%FOUND`/`%EQUAL` | Yes | Backed by SQLite, checked by `tools/parity/check.py`. See [`docs/LANGUAGE.md`](./docs/LANGUAGE.md) |
 | `/COPY`, `/INCLUDE`, `/IF DEFINED`/`/DEFINE`/`/EOF` | Python only | See [`docs/LANGUAGE.md`](./docs/LANGUAGE.md) |
 | Printer files: `dcl-f ... printer`, `WRITE` a record format, `OFLIND`, `EDTCDE`, `PAGNBR`, `SKIPB`/`SPACEA`... (not O-specs) | Python only | Output goes to stdout or `--spool-dir`. See [`docs/LANGUAGE.md`](./docs/LANGUAGE.md) |
 | `CALL`/`PARM`/`PLIST`/`*ENTRY` and `callp` to `dcl-pr ... extpgm`: one program calling another by name | Python only | Looked up in the caller's folder, then `-I` folders. See [`docs/LANGUAGE.md`](./docs/LANGUAGE.md) |
 | The 20 core built-in functions: `%TRIM` `%TRIML` `%TRIMR` `%UPPER` `%LOWER` `%LEN` `%SUBST` `%SCAN` `%REPLACE` `%CHAR` `%DEC` `%DECH` `%INT` `%INTH` `%ABS` `%SQRT` `%REM` `%DIV` `%MIN` `%MAX`, and `NOT`, `*BLANKS`, `*ZEROS` | Yes | All three ports, checked by `tools/parity/check.py` |
-| `%EOF`, `%FOUND`, `%EQUAL`, `%ELEM`, `%LOOKUP` | Python only | They belong to files and arrays. Not yet: `%EDITC`, `%EDITW`, `%XLATE`, `%CHECK`, date and time functions |
+| `%EOF`, `%FOUND`, `%EQUAL` | Yes | They belong to files |
+| `%ELEM`, `%LOOKUP` | Python only | They belong to arrays. Not yet: `%EDITC`, `%EDITW`, `%XLATE`, `%CHECK`, date and time functions |
 
 Full detail: [`docs/LANGUAGE.md`](./docs/LANGUAGE.md).
 
@@ -191,7 +196,7 @@ Full detail: [`docs/LANGUAGE.md`](./docs/LANGUAGE.md).
 | Feature | Supported | Notes |
 |---|---|---|
 | Record formats, named fields, constants | Yes | WORKSTN display files |
-| Physical files (record format, fields, `K` key lines, `UNIQUE`) | Python only | `DESCEND` keys are an error. See [`docs/DDS_REFERENCE.md`](./docs/DDS_REFERENCE.md) |
+| Physical files (record format, fields, `K` key lines, `UNIQUE`) | Yes | `DESCEND` keys are an error. See [`docs/DDS_REFERENCE.md`](./docs/DDS_REFERENCE.md) |
 | Printer files (`SKIPB`/`SKIPA`/`SPACEB`/`SPACEA`, line and position, `EDTCDE`, `PAGNBR`) | Python only | See [`docs/DDS_REFERENCE.md`](./docs/DDS_REFERENCE.md) |
 | `CFnn`/`CAnn` | Yes | |
 | Single `N?nn` indicator conditioning per line | Yes | |
@@ -216,6 +221,19 @@ screen, done, _ := r.Next(nil)
 fmt.Println(screen.FormatName)
 
 screen, done, _ = r.Next(&rpgle.Resume{Key: "ENTER", Values: map[string]string{"cmd": "M"}})
+```
+
+For `DISK` files, open a database from the `sqlitedb` package and hand it to `RunWith`:
+
+```go
+import "github.com/wren-creator/rpgle_library/go/sqlitedb"
+
+pf, _ := rpgle.ParsePF("CUSTMAST", pfSource)
+db, _ := sqlitedb.Open("shop.db")           // or ":memory:"
+defer db.Close()
+db.OpenFile(pf)                             // creates the table if it is new
+
+r := rpgle.RunWith(prog, dds, rpgle.RunOptions{DB: db, PFs: map[string]*rpgle.PhysicalFile{"CUSTMAST": pf}})
 ```
 
 Full API and the JS-generator-to-Go-channel design: [`go/README.md`](./go/README.md).
@@ -261,7 +279,8 @@ Goal: run and test RPG IV logic on Linux, macOS or Windows, with no IBM i licens
 - [ ] **5. Port parity.** Bring JS and Go up to the Python port. See "Coming to the JS and Go ports" below
   - [x] 5a. The behavior fixes, checked by `tools/parity/check.py` and CI
   - [x] 5b-i. The built-in functions, `NOT` and the figurative constants
-  - [ ] 5b-ii. The rest of the features, in the order listed below
+  - [x] 5b-ii. `DISK` files on SQLite, conditioning indicators, `KLIST`/`KFLD`, `%EOF`/`%FOUND`/`%EQUAL`
+  - [ ] 5b-iii. The rest of the features, in the order listed below
 
 ### Coming to the JS and Go ports
 
@@ -269,7 +288,7 @@ The Python port is the reference. These are planned for the JS and Go ports, rou
 
 1. ~~**The behavior fixes**~~ **Done**, and checked by `tools/parity/check.py` in CI. Every feature below is ported with its parity cases added to `tools/parity/cases.json`, so the check keeps all three honest as they grow.
 2. ~~**The built-in functions**~~ **Done**: all twenty core functions, `NOT` and `*BLANKS`/`*ZEROS`, with 160 parity cases. (The file-status and array functions come with the files and arrays; the overflow indicators come with printer files.)
-3. **DISK files**, with the same keyed-access model (`CHAIN`, `SETLL`, `READ`, `READE`, `WRITE`, `UPDATE`, `DELETE`) on SQLite, which means choosing a database library for each language.
+3. ~~**DISK files**~~ **Done**: the same keyed-access model (`CHAIN`, `SETLL`, `READ`, `READE`, `WRITE`, `UPDATE`, `DELETE`, `KLIST`/`KFLD`, `%EOF`/`%FOUND`/`%EQUAL`) on SQLite, with 98 parity cases that run whole programs and compare every table afterward. JS uses `better-sqlite3` and Go uses `modernc.org/sqlite`, both kept out of the core so it stays dependency free.
 4. **Free-form RPG** (`**FREE`): declarations, loops, procedures, data structures and arrays.
 5. **`/COPY` includes**, **calls between programs**, and **printer files**.
 6. **A command line**, so `rpgle run` works the same from each port.

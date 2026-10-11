@@ -41,7 +41,7 @@ npm version major   # 1.0.0 → 2.0.0  (breaking changes)
 git push origin main --tags
 ```
 
-The GitHub Actions workflow (`.github/workflows/ci.yml`) runs `npm test` on Node 22 and 24, `go test` and `go vet` for the Go module, and the Python tests (`python -m unittest discover -s tests`) on Python 3.12, 3.13 and 3.14, on every push and PR. The publish step (npm) is included in the same file but commented out until the `NPM_TOKEN` secret above is configured; uncomment it once you're ready to publish automatically on tag push.
+The GitHub Actions workflow (`.github/workflows/ci.yml`) runs `npm ci` and `npm test` on Node 22 and 24 (the install brings in `better-sqlite3` for the DISK file tests), `go test` and `go vet` for the Go module, and the Python tests (`python -m unittest discover -s tests`) on Python 3.12, 3.13 and 3.14, on every push and PR. The publish step (npm) is included in the same file but commented out until the `NPM_TOKEN` secret above is configured; uncomment it once you're ready to publish automatically on tag push.
 
 ## Releasing a New Version (Go)
 
@@ -87,6 +87,16 @@ npm publish --access public
 
 ---
 
+## The SQLite dependency
+
+The core of every port has no dependencies, and `DISK` files are the one exception, kept out of the way on purpose:
+
+- **npm:** `better-sqlite3` is an *optional peer dependency* (`peerDependencies` plus `peerDependenciesMeta`), so `npm install rpgle_library` installs nothing extra. The code loads it with `require` the first time a `Database` is created, and says so plainly if it is missing. It is also a dev dependency, so `npm ci` has what the tests need. `better-sqlite3` 12 supports Node 20 to 25 (13 needs Node 22), so `>=11.0.0` is the declared range and DISK files need Node 20 or newer, while `engines` still says Node 16 for the core.
+- **Go:** the SQLite code is the `sqlitedb` subpackage, so only programs that import it compile `modernc.org/sqlite`. It is pinned to v1.34.5, the newest release whose `go.mod` still says Go 1.21; later ones need Go 1.23 or newer, so raise the Go floor and the pin together.
+- **Python:** `sqlite3` is in the standard library.
+
+When the dependency needs to move, check `tools/parity/check.py` and both DISK test files (`test/database.test.js`, `go/database_test.go`) first.
+
 ## Versioning Policy
 
 This library follows [Semantic Versioning](https://semver.org/):
@@ -97,7 +107,7 @@ This library follows [Semantic Versioning](https://semver.org/):
 
 The JS, Go, and Python implementations are meant to behave identically for any input all three support. A behavior change in one that isn't mirrored in the others should be treated as a bug, not shipped as a version bump in only one language.
 
-**Where that stands today:** the three ports agree on every case in `tools/parity/cases.json`, and CI checks it. What differs is features: the Python port has a full runtime (free-form RPG, files, calls, printing) that JS and Go don't have yet, and the root README's "Status by language" says exactly which. A feature that exists in only some ports is fine; the same input giving different answers is not.
+**Where that stands today:** the three ports agree on every case in `tools/parity/cases.json`, and CI checks it. What differs is features: the Python port has a full runtime (free-form RPG, calls, printing, arrays) that JS and Go don't have yet (DISK files they now share), and the root README's "Status by language" says exactly which. A feature that exists in only some ports is fine; the same input giving different answers is not.
 
 ### Checking port parity
 
@@ -110,4 +120,4 @@ It needs `python3`, `node` and `go` on the PATH. Each port has a small runner (`
 
 **When you change a behavior in one port, add a case to `cases.json` first** and watch the check fail in the ports you haven't changed yet. That failure is the point: it is how a behavior difference gets found instead of shipped. When you port a feature, add its cases the same way.
 
-**Versions today.** The Python port is at **1.1.0**: it gained a great deal (new opcodes, DDS support and API), a minor bump under the policy above. The JS and Go ports are still **1.0.0** but have unreleased behavior fixes (see the changelog), which are bug fixes, so publish them as **1.0.1** (the Go module is released by tag, `v1.0.1`). Move them to 1.1.0 when they gain the features that make the Python port 1.1.0. **Python versions:** `requires-python` is `>=3.12`; the test suite and CI run on 3.12, 3.13 and 3.14, and nothing older has been tested.
+**Versions today.** The Python port is at **1.1.0**: it gained a great deal (new opcodes, DDS support and API), a minor bump under the policy above. The JS and Go ports are still **1.0.0** but have unreleased behavior fixes and, now, DISK files (see the changelog). New API that doesn't break anything is a minor bump, so publish them as **1.1.0** (the Go module is released by tag, `v1.1.0`). **Python versions:** `requires-python` is `>=3.12`; the test suite and CI run on 3.12, 3.13 and 3.14, and nothing older has been tested.

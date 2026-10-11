@@ -1,6 +1,6 @@
 # DDS Reference (Display Files)
 
-`src/dds.js` / `go/dds.go` / `python/src/rpgle/dds.py` parse DDS source for **WORKSTN display files only** — the subset needed to describe a screen made of record formats, constant text, and named input/output fields. This document covers exactly what's parsed, and is explicit about what isn't.
+`src/dds.js` / `go/dds.go` / `python/src/rpgle/dds.py` parse DDS source for **WORKSTN display files** (physical files have their own parser, see "Physical Files (DISK)" below), the subset needed to describe a screen made of record formats, constant text, and named input/output fields. This document covers exactly what's parsed, and is explicit about what isn't.
 
 ## Column Layout
 
@@ -92,7 +92,7 @@ Only `I`/`B` fields end up in a rendered screen's `inputMap` — see `renderForm
 
 ## Physical Files (DISK)
 
-A DISK file's DDS describes one record format, its fields, and its key. The RPG program declares only the file name (F-spec column 22 = `E`), and every field below becomes a program variable, the same way a display file's fields do. Parsed by `parse_pf()` in `python/src/rpgle/pf.py` (Python port only so far).
+A DISK file's DDS describes one record format, its fields, and its key. The RPG program declares only the file name (F-spec column 22 = `E`), and every field below becomes a program variable, the same way a display file's fields do. Parsed by `parsePf()` in `src/pf.js`, `ParsePF()` in `go/pf.go` and `parse_pf()` in `python/src/rpgle/pf.py`.
 
 ```
      A                                      UNIQUE

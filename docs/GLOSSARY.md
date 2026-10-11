@@ -62,7 +62,7 @@ A file (in this library, always the WORKSTN display file) whose field definition
 The free-form expression area (columns 36–80) of a C-spec line, used by `EVAL`, `IF`, `DOW`, and `WHEN`. Contrasted with "classic" factor 2, which is a single fixed-column operand (see Factor 1 / Factor 2).
 
 ### F-spec (File Specification)
-The file-declaration lines of fixed-form RPG, identified by `F` in column 6. The JS and Go ports read only enough of an F-spec to identify a single WORKSTN display file. The Python port reads every F-spec: display, DISK and PRINTER files, including the `OFLIND` keyword. Free-form uses `dcl-f` instead.
+The file-declaration lines of fixed-form RPG, identified by `F` in column 6. All three ports read every F-spec: display and DISK files in all of them, and PRINTER files (including the `OFLIND` keyword) in the Python port. In JS and Go the program's one display file is the first WORKSTN F-spec. Free-form uses `dcl-f` instead.
 
 ### Factor 1 / Factor 2
 Classic (pre-extended-factor-2) RPG's fixed-column operand terminology, still used by "traditional" opcodes like `DIV`/`MVR`: factor 1 is the left operand, factor 2 the right, result is where the answer goes — three separate fixed-column fields on one C-spec line, not a free-form expression.

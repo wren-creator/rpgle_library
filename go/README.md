@@ -1,8 +1,8 @@
 # rpgle (Go)
 
-A zero-dependency RPG IV (RPGLE) and DDS parser/interpreter for Go.
+An RPG IV (RPGLE) and DDS parser/interpreter for Go. The core has no dependencies; `DISK` files come from the separate `sqlitedb` package, which uses `modernc.org/sqlite` (pure Go, no cgo).
 
-> **Scope:** this port is the original core: fixed-form parsing, `EXFMT`, the core opcodes and display-file DDS. The Python port has grown into a full runtime (free-form, files, calls, printing). See the root README's "Status by language" and "Port parity" for exactly what differs.
+> **Scope:** this port has fixed-form parsing, `EXFMT`, the core opcodes, display-file DDS, the built-in functions and keyed `DISK` files on SQLite. The Python port has grown into a full runtime (free-form, calls, printing, arrays). See the root README's "Status by language" and "Port parity" for exactly what differs.
 
 ```bash
 go get github.com/wren-creator/rpgle_library/go
@@ -74,11 +74,15 @@ Parses DDS display-file source. `DDS.Formats` is `map[string]*Format`; `DDS.Form
 
 ### `ParseRPGLE(source string) (*Program, error)`
 
-Tokenizes fixed-form RPG IV source into `Program{File, DSpecs, Statements}`.
+Tokenizes fixed-form RPG IV source into `Program{File, Files, DSpecs, Statements}`. `Files` is every F-spec; `File` is the first `WORKSTN` one.
 
 ### `BuildVars(prog *Program, dds *DDS) map[string]*Var`
 
 Builds the program's variable table from DDS-bound fields and D-spec standalone fields.
+
+### `BuildVarsWith(prog *Program, dds *DDS, pfs map[string]*PhysicalFile) map[string]*Var`
+
+The same, plus the fields of each `DISK` file's record format (`pfs` is keyed by upper-case file name).
 
 ### `Compile(statements []Statement) (*Compiled, error)`
 
@@ -100,6 +104,18 @@ Starts the program. See "Why Go, Not JS Generators" above.
 |---|---|---|
 | `Key` | `string` | Whichever function key the caller recognized |
 | `Values` | `map[string]string` | Typed text for the input fields just shown |
+
+### `RunWith(prog *Program, dds *DDS, opts RunOptions) *Runner`
+
+`Run` for a program with `DISK` files. `RunOptions{DB, PFs}` takes a `Database` and the physical-file definitions (from `ParsePF`) keyed by upper-case file name.
+
+### `ParsePF(name, source string) (*PhysicalFile, error)`
+
+Parses physical-file DDS: the record format, its fields, the `K` key lines and `UNIQUE`. `DESCEND` keys are an error.
+
+### The `sqlitedb` package
+
+`sqlitedb.Open(path)` returns a `*DB` (`":memory:"` for a private one); `db.OpenFile(pf)` creates the file's table if it is new, checks the columns match if it isn't, and returns an `rpgle.FileHandle` (`Chain`, `Setll`, `Setgt`, `Read`, `Readp`, `Reade`, `Readpe`, `Write`, `Update`, `Delete`, and `Found`, `EOF`, `Equal`). The interfaces live in the core package, so you can supply another database. Each statement commits as it runs, so `Close` is all the cleanup there is. See `examples/customer-inquiry` for a whole program.
 
 ### `EvalExpr(src string, ctx *Context) (Value, error)` / `SplitAssignment(src string) (lvalue, rvalueSrc string, err error)`
 

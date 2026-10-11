@@ -12,7 +12,7 @@ Header specs set compile-time/program-level options (date format, debug flags, e
 
 ### F-spec: WORKSTN and DISK files (fixed-form; free-form uses `dcl-f`)
 
-File specs describe the files a program uses. Every F-spec is collected in `Program.files`, and `Program.file` is still the program's `WORKSTN` (display) file. `DISK` files are **Python port only so far**, and must be externally described (column 22 = `E`): their layout comes from a physical-file DDS (see "DISK Files" below and [`DDS_REFERENCE.md`](./DDS_REFERENCE.md)). The key is whatever the DDS says; the `K` in column 34 is read but the DDS decides.
+File specs describe the files a program uses. Every F-spec is collected in `Program.files`, and `Program.file` is still the program's `WORKSTN` (display) file. `DISK` files work in all three ports, and must be externally described (column 22 = `E`): their layout comes from a physical-file DDS (see "DISK Files" below and [`DDS_REFERENCE.md`](./DDS_REFERENCE.md)). The key is whatever the DDS says; the `K` in column 34 is read but the DDS decides.
 
 ### D-spec — standalone fields only
 
@@ -81,7 +81,7 @@ Either way, the shape is the same plain data — no terminal protocol is involve
 | `DIV` / `MVR` | Classic fixed-column integer divide, then remainder-of-last-DIV | `seed DIV 9973 quot` then `MVR seed` |
 | `RETURN` | Ends the program (or the procedure, in free-form) | `RETURN` |
 | `ELSEIF` / `DOU` / `FOR` / `ITER` / `ENDFOR` | Free-form control flow, also reachable as fixed-form opcodes except `FOR`, which is free-form only | `FOR i = 1 TO 10` |
-| `CHAIN` `SETLL` `SETGT` `READ` `READE` `READP` `READPE` `WRITE` `UPDATE` `DELETE` | DISK file access and printing (Python port), see "DISK Files" and "Printer Files" | `custno CHAIN CUSTMAST 71` |
+| `CHAIN` `SETLL` `SETGT` `READ` `READE` `READP` `READPE` `WRITE` `UPDATE` `DELETE` | DISK file access (all ports) and printing (Python port), see "DISK Files" and "Printer Files" | `custno CHAIN CUSTMAST 71` |
 | `KLIST` / `KFLD` | Names a composite key; `KFLD`'s field goes in the result column | `ORDK KLIST` |
 | `CALL` / `PARM` / `PLIST` | Calls another program, see "Calling Other Programs" | `CALL 'CUSTLOOKUP'` |
 | `CALLP` | Free-form procedure and program calls | `callp total(a : b)` |
@@ -344,7 +344,7 @@ Not supported, and each is an error, never a silent blank: O-specs and program-d
 
 ## DISK Files
 
-*Python port only so far.* A program with `DISK` F-specs runs against a `Database` (SQLite) and a dict of physical-file DDS, one per file:
+All three ports. A program with `DISK` F-specs runs against a database (SQLite) and a map of physical-file DDS, one per file:
 
 ```python
 from rpgle import Database, parse_pf, parse_rpgle, parse_dds, run_program
@@ -354,7 +354,24 @@ pfs = {"CUSTMAST": parse_pf("CUSTMAST", open("custmast.pf").read())}
 for screen in run_program(prog, dds, db, pfs): ...
 ```
 
-Every field of the file's record format becomes a program variable. `CHAIN`, `READ` and friends copy a record into those variables; `WRITE` and `UPDATE` copy them back out. `WRITE`/`UPDATE` name the record format (`CUSTREC`) and the others name the file (`CUSTMAST`); either works anywhere here. Changes are committed when the program ends.
+```javascript
+const { Database, parsePf, runProgram } = require('rpgle_library');
+
+const db = new Database('shop.db');           // or new Database() for in-memory
+const pfs = { CUSTMAST: parsePf('CUSTMAST', fs.readFileSync('custmast.pf', 'utf8')) };
+for (const screen of runProgram(rpg, dds, { db, pfs })) { /* ... */ }  // or gen.next() as usual
+```
+
+```go
+db, _ := sqlitedb.Open("shop.db")             // or ":memory:"
+pf, _ := rpgle.ParsePF("CUSTMAST", pfSource)
+db.OpenFile(pf)
+r := rpgle.RunWith(prog, dds, rpgle.RunOptions{DB: db, PFs: map[string]*rpgle.PhysicalFile{"CUSTMAST": pf}})
+```
+
+SQLite comes from the language's own route, so the core stays dependency free. Python has it built in. JS loads `better-sqlite3` the first time you create a `Database` (an optional peer dependency, so `npm install better-sqlite3` yourself; it needs Node 20 or newer, while the rest of the JS port runs on Node 16). Go keeps it in the separate `sqlitedb` package (`modernc.org/sqlite`, pure Go), so importing the core never compiles it. The three agree on what a program does to the tables, and `tools/parity/check.py` checks that with whole programs.
+
+Every field of the file's record format becomes a program variable. `CHAIN`, `READ` and friends copy a record into those variables; `WRITE` and `UPDATE` copy them back out. `WRITE`/`UPDATE` name the record format (`CUSTREC`) and the others name the file (`CUSTMAST`); either works anywhere here. Changes are saved as each statement runs (Python commits when the program ends), so a second connection sees them once the program is done.
 
 ### Resulting indicators (columns 71-76)
 
@@ -434,11 +451,11 @@ primary    := NUMBER | STRING | '*ON' | '*OFF'
             | '(' expr ')'
 ```
 
-All three ports share the grammar down to `*BLANKS`/`*ZEROS` and the `%` functions. The JS and Go ports have no subscripts, `ds.field` names or procedure calls, since they have no arrays, data structures or procedures, and no overflow indicators, since they can't print.
+All three ports share the grammar down to `*BLANKS`/`*ZEROS` and the `%` functions. The JS and Go ports have no subscripts, `ds.field` names or procedure calls, since they have no arrays, data structures or procedures, and no overflow indicators, since they can't print. `%EOF`, `%FOUND` and `%EQUAL` work everywhere a program has `DISK` files.
 
 ### Built-in functions
 
-All three ports have the twenty core functions below, and they agree on every edge case (`tools/parity/check.py` runs about 160 of them through all three). Only `%EOF`, `%FOUND`, `%EQUAL`, `%ELEM` and `%LOOKUP`, which belong to files and arrays, are Python only.
+All three ports have the twenty core functions below, and they agree on every edge case (`tools/parity/check.py` runs about 160 of them through all three). Only `%ELEM` and `%LOOKUP`, which belong to arrays, are Python only. `%EOF`, `%FOUND` and `%EQUAL` (the file-status functions) work in all three.
 
 | Function | Result |
 |---|---|
@@ -480,7 +497,7 @@ Nothing here is an oversight: each is documented where it matters, and each is a
 - **Language:** `MONITOR`/`ON-ERROR` and `%ERROR`, the `(E)` opcode extender, `DSPLY`, date, time and timestamp types, pointers, `%EDITC`/`%EDITW`/`%XLATE`, `*OMIT`, `%PARMS`, procedures taking data structures as parameters, arrays inside data structures.
 - **Files:** subfiles and windows in display DDS, DDS keyword continuation lines, OR'd and multi-line indicator conditions, `DESCEND` keys, joined and select/omit logical files, `READC`, user-controlled open/close.
 - **Printing:** overprinting (`SPACEA(0)`), `DATE`/`TIME`/`USER`/`SYSNAME` fields, `EDTWRD`, edit codes outside the supported set, barcodes.
-- **The JS and Go ports** have none of the Python runtime (free-form, files, includes, calls, printing, arrays). See the root README's "Status by language".
+- **The JS and Go ports** have none of the rest of the Python runtime (free-form, includes, calls, printing, arrays, data structures, procedures). See the root README's "Status by language".
 
 ## See Also
 
