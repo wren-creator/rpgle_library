@@ -2,6 +2,7 @@ package rpgle_test
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -204,5 +205,40 @@ func TestAdventureAlwaysFightPlaythroughStaysInBoundsAndEnds(t *testing.T) {
 	}
 	if steps >= 500 {
 		t.Error("playthrough should terminate well within the step budget")
+	}
+}
+
+// A numeric field with decimals is shown with its decimal point (one column
+// wider than a real 5250 draws it), so what's on screen survives being typed
+// back in: "000004875" would parse as 4875, not 48.75. (Parity with Python.)
+func TestNumericFieldWithDecimalsShowsItsDecimalPoint(t *testing.T) {
+	dds, err := rpgle.ParseDDS("     A          R MAIN\n     A            AMT            9  2O  1  1\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	show := func(value float64, dec, length int) string {
+		vars := map[string]*rpgle.Var{"amt": {Type: 'N', Length: length, Dec: dec, Value: rpgle.NumberValue(value)}}
+		return rpgle.RenderFormat(dds.Formats["MAIN"], vars, map[string]bool{}).Fields[0].Text
+	}
+	cases := []struct {
+		value       float64
+		dec, length int
+		want        string
+	}{
+		{48.75, 2, 9, "0000048.75"},
+		{-48.75, 2, 9, "-000048.75"},
+		{0, 2, 9, "0000000.00"},
+		{1250, 2, 9, "0001250.00"},
+		{42, 0, 5, "00042"}, // whole-number fields are unchanged
+		{-5, 0, 5, "-0005"},
+	}
+	for _, c := range cases {
+		if got := show(c.value, c.dec, c.length); got != c.want {
+			t.Errorf("show(%v, dec %d, len %d) = %q, want %q", c.value, c.dec, c.length, got, c.want)
+		}
+	}
+	// it round-trips: the text parses back to the same number
+	if f, err := strconv.ParseFloat(show(48.75, 2, 9), 64); err != nil || f != 48.75 {
+		t.Errorf("round trip of 48.75 = %v, %v", f, err)
 	}
 }

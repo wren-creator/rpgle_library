@@ -331,11 +331,23 @@ func assign(vars map[string]*Var, indicators map[string]bool, lvalue string, rva
 	return nil
 }
 
+// formatFieldText is a field's display text. Numeric fields are zero-filled
+// to their length. With decimals the decimal point is written out (so the
+// field is one column wider than a real 5250 would draw it, which shows bare
+// digits with an implied point): bare digits would not survive being typed
+// back in, since "000004875" parses as 4875, not 48.75.
 func formatFieldText(v *Var) string {
 	if v.Type == 'A' {
 		return v.Value.Str
 	}
 	n := v.Value.Num
+	if v.Dec > 0 {
+		body := fmt.Sprintf("%0*.*f", v.Length+1, v.Dec, math.Abs(n))
+		if n < 0 {
+			return "-" + body[1:]
+		}
+		return body
+	}
 	if n < 0 {
 		width := v.Length - 1
 		if width < 1 {

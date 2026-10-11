@@ -7,7 +7,7 @@ const path = require('path');
 
 const { parseDds } = require('../src/dds');
 const { parseRpgle } = require('../src/rpgle');
-const { runProgram, buildVars, compile } = require('../src/interpreter');
+const { runProgram, buildVars, compile, renderFormat } = require('../src/interpreter');
 
 const PROG_DIR = path.join(__dirname, '..', 'programs');
 const ddsSource = fs.readFileSync(path.join(PROG_DIR, 'adventure.dspf'), 'utf8');
@@ -124,4 +124,23 @@ test('ADVENTURE: always-fight playthrough stays in bounds and eventually ends (w
   assert.ok(sawCombat, 'expected at least one encounter over 500 steps');
   assert.ok(sawEndgame, 'expected the playthrough to reach an ending over 500 steps');
   assert.ok(steps < 500, 'playthrough should terminate well within the step budget');
+});
+
+// A numeric field with decimals is shown with its decimal point (one column
+// wider than a real 5250 draws it), so what's on screen survives being typed
+// back in: "000004875" would parse as 4875, not 48.75. (Parity with Python.)
+test('a numeric field with decimals shows its decimal point', () => {
+  const dds = parseDds('     A          R MAIN\n     A            AMT            9  2O  1  1\n');
+  const show = (value, dec, length) =>
+    renderFormat(dds.formats.MAIN, { amt: { type: 'N', length, dec, value } }, {}).fields[0].text;
+
+  assert.equal(show(48.75, 2, 9), '0000048.75');
+  assert.equal(show(-48.75, 2, 9), '-000048.75');
+  assert.equal(show(0, 2, 9), '0000000.00');
+  assert.equal(show(1250, 2, 9), '0001250.00');
+  assert.equal(parseFloat(show(48.75, 2, 9)), 48.75); // round-trips
+  assert.equal(parseFloat(show(-48.75, 2, 9)), -48.75);
+  // whole-number fields are unchanged
+  assert.equal(show(42, 0, 5), '00042');
+  assert.equal(show(-5, 0, 5), '-0005');
 });

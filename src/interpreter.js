@@ -214,9 +214,18 @@ function assign(vars, indicators, lvalue, rvalue) {
   }
 }
 
+// Display text for a field. Numeric fields are zero-filled to their length.
+// With decimals the decimal point is written out (so the field is one
+// column wider than a real 5250 would draw it, which shows bare digits with
+// an implied point): bare digits would not survive being typed back in,
+// since "000004875" parses as 4875, not 48.75.
 function formatFieldText(v) {
   if (v.type === 'A') return v.value;
   const n = v.value;
+  if (v.dec > 0) {
+    const body = Math.abs(n).toFixed(v.dec).padStart(v.length + 1, '0');
+    return n < 0 ? '-' + body.slice(1) : body;
+  }
   if (n < 0) return '-' + String(Math.round(-n)).padStart(Math.max(1, v.length - 1), '0');
   return String(Math.round(n)).padStart(v.length, '0');
 }
