@@ -28,7 +28,7 @@
 
 'use strict';
 
-const { evalExpr, splitAssignment } = require('./expr');
+const { evalExpr, splitAssignment, toNumber, pow10, asString } = require('./expr');
 
 function buildVars(rpgAst, ddsFormats) {
   const vars = {};
@@ -208,20 +208,6 @@ function readValue(vars, name) {
   return vars[key].value;
 }
 
-// A strict number reader: a string must look like a number (so "12x", "" and
-// "1.2.3" are not numbers) rather than being coerced to NaN, 0 or a prefix.
-// Returns NaN for anything that isn't one.
-const NUMBER_TEXT = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
-function toNumber(value) {
-  if (typeof value === 'number') return value;
-  if (typeof value === 'boolean') return value ? 1 : 0;
-  if (typeof value === 'string') {
-    const t = value.trim();
-    return NUMBER_TEXT.test(t) ? Number(t) : NaN;
-  }
-  return NaN;
-}
-
 function assign(vars, indicators, lvalue, rvalue) {
   const indM = /^\*IN(\d\d)$/i.exec(lvalue);
   if (indM) { indicators[indM[1]] = Boolean(rvalue); return; }
@@ -230,7 +216,7 @@ function assign(vars, indicators, lvalue, rvalue) {
   const v = vars[key];
   if (!v) throw new Error(`Unknown RPG variable on assignment: ${lvalue}`);
   if (v.type === 'A') {
-    v.value = String(rvalue).slice(0, v.length).padEnd(v.length, ' ');
+    v.value = asString(rvalue).slice(0, v.length).padEnd(v.length, ' ');
   } else {
     // Truncate-on-assign (no rounding) -- the real RPG default, and
     // what DIV/MVR-based modulo relies on for boundedness.
@@ -239,7 +225,7 @@ function assign(vars, indicators, lvalue, rvalue) {
       const what = typeof rvalue === 'string' ? `'${rvalue}'` : 'that value';
       throw new Error(`${what} is not a number, so it can't be put in the numeric field ${lvalue.trim()}`);
     }
-    const factor = Math.pow(10, v.dec || 0);
+    const factor = pow10(v.dec || 0);
     v.value = Math.trunc(n * factor) / factor;
   }
 }

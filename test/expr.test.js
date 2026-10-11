@@ -125,3 +125,104 @@ test('division by zero is an error, ordinary division still works', () => {
   assert.equal(evalExpr('7 / 2', ctx), 3.5);
   assert.equal(evalExpr('0 / 5', ctx), 0);
 });
+
+// ── built-in functions (parity with the Python port) ────────────────────
+// Every case here is also in python/tests/test_expr.py and tools/parity.
+
+const ev = (src, vars = {}) => evalExpr(src, { vars, indicators: {} });
+const eachCase = (cases, vars) => {
+  for (const [src, want] of cases) assert.deepEqual(ev(src, vars), want, src);
+};
+const fails = (sources, pattern) => {
+  for (const src of sources) assert.throws(() => ev(src), pattern, src);
+};
+
+test('numeric built-ins', () => {
+  eachCase([
+    ['%abs(-5)', 5], ['%abs(3)', 3], ['%int(7.9)', 7], ['%int(-7.9)', -7],
+    ['%inth(7.5)', 8], ['%inth(-7.5)', -8], ["%dec('12.345' : 5 : 2)", 12.34], ["%dech('12.345' : 5 : 2)", 12.35],
+    ['%rem(17 : 5)', 2], ['%div(17 : 5)', 3], ['%sqrt(16)', 4], ['%min(4 : 2 : 9)', 2], ['%max(4 : 2 : 9)', 9],
+    ["%min('b' : 'a')", 'a'], ['%rem(-17 : 5)', -2], ['%div(-17 : 5)', -3],
+  ]);
+});
+
+test('text built-ins', () => {
+  eachCase([
+    ["%upper('abC')", 'ABC'], ["%lower('abC')", 'abc'], ["%triml('  a  ')", 'a  '], ["%trimr('  a  ')", '  a'],
+    ["%trim('  a  ')", 'a'], ["%scan('lo' : 'hello world')", 4], ["%scan('o' : 'hello world' : 6)", 8],
+    ["%scan('zz' : 'hello')", 0], ["%replace('XY' : 'hello' : 2 : 3)", 'hXYo'], ["%replace('XY' : 'hello' : 3 : 0)", 'heXYllo'],
+    ["%replace('XY' : 'hello')", 'XYllo'], ["%subst('hello' : 2 : 3)", 'ell'], ["%len('abc')", 3],
+  ]);
+});
+
+test('%CHAR uses a bare variable\'s declared decimals, an expression does not', () => {
+  const vars = {
+    money: { type: 'N', length: 9, dec: 2, value: 5 },
+    whole: { type: 'N', length: 5, dec: 0, value: 5 },
+  };
+  eachCase([['%char(money)', '5.00'], ['%char(whole)', '5'], ['%char(money + 1)', '6'], ["%char('x')", 'x'], ['%char(*on)', '1'], ['%char(*off)', '0']], vars);
+});
+
+test('built-ins agree on characters, not bytes or UTF-16 units', () => {
+  eachCase([
+    ["%len('café')", 4], ["%len('\u{1f600}x')", 2], ["%subst('cafés' : 4 : 2)", 'és'],
+    ["%scan('é' : 'café')", 4], ["%replace('\u{1f600}' : 'abc' : 2 : 1)", 'a\u{1f600}c'],
+  ]);
+});
+
+test('%SUBST clamps instead of failing', () => {
+  eachCase([
+    ["%subst('hello' : 0 : 2)", 'he'], ["%subst('hello' : -3 : 2)", 'he'], ["%subst('hello' : 9)", ''],
+    ["%subst('hello' : 3 : 99)", 'llo'], ["%subst('hello' : 3 : -1)", ''], ["%subst('hello' : 2)", 'ello'],
+  ]);
+});
+
+test('numbers become text in plain decimal, never exponent form', () => {
+  eachCase([
+    ['%char(0.0000001)', '0.0000001'], ['%char(0.00001234)', '0.00001234'],
+    ['%char(10000000000000000000000)', '10000000000000000000000'], ['%char(123456789012345678)', '123456789012345680'],
+    ['%char(0.1 + 0.2)', '0.30000000000000004'], ['%char(-2.5)', '-2.5'], ['%char(7)', '7'],
+  ]);
+});
+
+test('a position or length that is not a whole number is an error', () => {
+  fails([
+    "%dec('5' : 5 : 'x')", "%scan('a' : 'abc' : 'x')", "%replace('a' : 'bcd' : 'x')", "%replace('a' : 'bcd' : 1 : 'x')",
+    "%subst('abc' : 'x')", "%subst('abc' : 1 : 'x')",
+  ], /not a whole number/);
+});
+
+test('decimal positions are limited to what RPG allows', () => {
+  fails(['%dec(1 : 5 : 64)', '%dec(1 : 5 : -1)', '%dech(1 : 5 : 400)'], /0 to 63/);
+  eachCase([["%dec('12.345' : 5 : 0)", 12], ['%dec(1 : 63 : 63)', 1]]);
+});
+
+test('wrong argument counts and unknown functions are errors', () => {
+  fails(["%len('a' : 'b')", "%subst('a')", "%scan('a')", "%replace('a')", '%min(1)'], /takes .* argument/);
+  fails(['%trim()', '%abs()']); // no argument at all is a parse error before the count is checked
+  fails(['%nosuch(1)'], /Unsupported RPG built-in/);
+});
+
+test('built-in errors: not a number, divide by zero, negative square root', () => {
+  fails(["%dec('abc' : 5 : 2)", "%int('12x')", "%abs('')"], /is not a number/);
+  fails(['%rem(1 : 0)', '%div(1 : 0)'], /division by zero/);
+  fails(['%sqrt(-1)'], /negative/);
+});
+
+test('NOT binds looser than comparison and tighter than AND', () => {
+  eachCase([
+    ['not 1 = 2', true], ['not 1 = 1 or 2 = 2', true], ['not (1 = 1 and 2 = 2)', false], ['not not 1 = 1', true],
+    ['not 1 = 1 and 2 = 2', false],
+  ]);
+});
+
+test('*BLANKS and *ZEROS are figurative constants', () => {
+  eachCase([['*blanks', ''], ['*blank', ''], ['*zeros', 0], ['*zero', 0], ['*blanks = *blanks', true]]);
+});
+
+test('only plain numbers are numbers in arithmetic and ordering too', () => {
+  for (const src of ["'0x10' * 1", "'1_000' * 1", "'inf' * 1", "'abc' * 2"]) {
+    assert.ok(Number.isNaN(ev(src)), src); // not a number: NaN, never 16 or 1000
+  }
+  eachCase([["'5' * 2", 10], ["' 7 ' * 1", 7], ["'1e2' * 1", 100], ["'0x10' < 20", false], ["'9' < 10", true]]);
+});

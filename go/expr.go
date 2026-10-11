@@ -3,6 +3,7 @@ package rpgle
 import (
 	"fmt"
 	"math"
+	"math/big"
 	"regexp"
 	"strconv"
 	"strings"
@@ -65,13 +66,44 @@ func (v Value) AsFloat() float64 {
 		}
 		return 0
 	case 'S':
-		f, err := strconv.ParseFloat(strings.TrimSpace(v.Str), 64)
-		if err != nil {
-			return math.NaN()
+		if f, ok := parseNumberText(v.Str); ok {
+			return f
 		}
-		return f
+		return math.NaN()
 	}
 	return 0
+}
+
+// numberText is what a number looks like as text: an optional sign, digits, an
+// optional decimal point and an optional exponent. Anything else ("12x", "",
+// "1,5", "0x10", "inf") is not a number, rather than being read as a prefix, 0
+// or NaN. The Python and JS ports use the same rule.
+var numberText = regexp.MustCompile(`^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$`)
+
+// parseNumberText reads text as a number, reporting whether it was one.
+func parseNumberText(s string) (float64, bool) {
+	t := strings.TrimSpace(s)
+	if !numberText.MatchString(t) {
+		return 0, false
+	}
+	f, err := strconv.ParseFloat(t, 64)
+	return f, err == nil && !math.IsInf(f, 0)
+}
+
+// pow10 is 10 to the power n, correctly rounded (math.Pow10 multiplies tables
+// and is not, for larger n), matching Python's float(10 ** n).
+func pow10(n int) float64 {
+	f, _ := strconv.ParseFloat("1e"+strconv.Itoa(n), 64)
+	return f
+}
+
+// text is the value as text, as the Python port's as_string does: a number
+// that isn't one (NaN, infinity) is an error rather than the word "NaN".
+func (v Value) text() (string, error) {
+	if v.Kind == 'N' && (math.IsNaN(v.Num) || math.IsInf(v.Num, 0)) {
+		return "", fmt.Errorf("that value is not a number, so it can't be turned into text")
+	}
+	return v.AsString(), nil
 }
 
 // AsString mirrors JS's String(x) coercion, used by %TRIM/%LEN/%SUBST.
@@ -90,9 +122,16 @@ func (v Value) AsString() string {
 	return ""
 }
 
+// formatNumberForString writes a number as text. A whole number prints every
+// digit exactly; anything else prints the shortest digits that round-trip, and
+// never in exponent form.
 func formatNumberForString(n float64) string {
 	if n == math.Trunc(n) && !math.IsInf(n, 0) {
-		return strconv.FormatInt(int64(n), 10)
+		if math.Abs(n) < 1e15 {
+			return strconv.FormatInt(int64(n), 10)
+		}
+		i, _ := new(big.Float).SetFloat64(n).Int(nil) // exact, beyond int64 too
+		return i.String()
 	}
 	return strconv.FormatFloat(n, 'f', -1, 64)
 }
@@ -228,7 +267,7 @@ func tokenize(src string) ([]token, error) {
 			}
 			s := sb.String()
 			upper := strings.ToUpper(s)
-			if upper == "AND" || upper == "OR" {
+			if upper == "AND" || upper == "OR" || upper == "NOT" {
 				tokens = append(tokens, token{typ: tokLogic, str: upper})
 			} else {
 				tokens = append(tokens, token{typ: tokName, str: s})
@@ -311,8 +350,21 @@ func (p *exprParser) parseOr() (Value, error) {
 	return v, nil
 }
 
+// parseNot: NOT binds looser than a comparison and tighter than AND.
+func (p *exprParser) parseNot() (Value, error) {
+	if t := p.peek(); t != nil && t.typ == tokLogic && t.str == "NOT" {
+		p.next()
+		v, err := p.parseNot()
+		if err != nil {
+			return Value{}, err
+		}
+		return BoolValue(!v.AsBool()), nil
+	}
+	return p.parseCompare()
+}
+
 func (p *exprParser) parseAnd() (Value, error) {
-	v, err := p.parseCompare()
+	v, err := p.parseNot()
 	if err != nil {
 		return Value{}, err
 	}
@@ -324,7 +376,7 @@ func (p *exprParser) parseAnd() (Value, error) {
 		p.next()
 		// Same reasoning as parseOr: always parse the right side, even
 		// if the left side is already false.
-		rhs, err := p.parseCompare()
+		rhs, err := p.parseNot()
 		if err != nil {
 			return Value{}, err
 		}
@@ -486,6 +538,12 @@ func (p *exprParser) resolveIndicatorOrConst(name string) (Value, error) {
 	if name == "*OFF" {
 		return BoolValue(false), nil
 	}
+	if name == "*BLANK" || name == "*BLANKS" {
+		return StringValue(""), nil
+	}
+	if name == "*ZERO" || name == "*ZEROS" {
+		return NumberValue(0), nil
+	}
 	if name == "*INLR" || name == "*INRT" {
 		return BoolValue(p.ctx.Indicators[name[3:]]), nil
 	}
@@ -496,12 +554,27 @@ func (p *exprParser) resolveIndicatorOrConst(name string) (Value, error) {
 }
 
 func (p *exprParser) parseFuncCall(name string) (Value, error) {
+	fn, ok := bifs[name]
+	if !ok {
+		return Value{}, fmt.Errorf("unsupported RPG built-in: %s", name)
+	}
 	if err := p.expectOp("("); err != nil {
 		return Value{}, err
+	}
+	// Remember if the first argument was a bare variable: %CHAR needs its
+	// declared decimals.
+	before := p.pos
+	var firstTok *token
+	if before < len(p.tokens) {
+		firstTok = &p.tokens[before]
 	}
 	first, err := p.parseExpr()
 	if err != nil {
 		return Value{}, err
+	}
+	var firstVar *Var
+	if p.pos-before == 1 && firstTok != nil && firstTok.typ == tokName {
+		firstVar = p.ctx.Vars[strings.ToLower(firstTok.str)]
 	}
 	args := []Value{first}
 	for {
@@ -519,35 +592,7 @@ func (p *exprParser) parseFuncCall(name string) (Value, error) {
 	if err := p.expectOp(")"); err != nil {
 		return Value{}, err
 	}
-	switch name {
-	case "%TRIM":
-		return StringValue(strings.TrimSpace(args[0].AsString())), nil
-	case "%LEN":
-		return NumberValue(float64(len(args[0].AsString()))), nil
-	case "%SUBST":
-		str := args[0].AsString()
-		start := int(args[1].AsFloat()) - 1 // RPG %SUBST start is 1-based
-		length := len(str) - start
-		if len(args) > 2 {
-			length = int(args[2].AsFloat())
-		}
-		if start < 0 {
-			start = 0
-		}
-		if start > len(str) {
-			start = len(str)
-		}
-		end := start + length
-		if end > len(str) {
-			end = len(str)
-		}
-		if end < start {
-			end = start
-		}
-		return StringValue(str[start:end]), nil
-	default:
-		return Value{}, fmt.Errorf("unsupported RPG built-in: %s", name)
-	}
+	return fn(name, args, firstVar)
 }
 
 func (p *exprParser) readVar(name string) (Value, error) {

@@ -8,12 +8,13 @@
  * Grammar (case-insensitive keywords):
  *   expr       := orExpr
  *   orExpr     := andExpr (OR andExpr)*
- *   andExpr    := compare (AND compare)*
+ *   andExpr    := notExpr (AND notExpr)*
+ *   notExpr    := NOT notExpr | compare
  *   compare    := additive ((= | <> | <= | >= | < | >) additive)?
  *   additive   := term ((+ | -) term)*
  *   term       := unary ((* | /) unary)*
  *   unary      := '-' unary | primary
- *   primary    := NUMBER | STRING | '*ON' | '*OFF'
+ *   primary    := NUMBER | STRING | '*ON' | '*OFF' | '*BLANKS' | '*ZEROS'
  *               | '*IN' DIGIT DIGIT | '*INLR'
  *               | '%' NAME '(' expr (':' expr)* ')'
  *               | NAME | '(' expr ')'
@@ -64,7 +65,7 @@ function tokenize(src) {
       let j = i, s = '';
       while (j < src.length && /[A-Za-z0-9_]/.test(src[j])) { s += src[j]; j++; }
       const upper = s.toUpperCase();
-      if (upper === 'AND' || upper === 'OR') tokens.push({ type: 'logic', value: upper });
+      if (upper === 'AND' || upper === 'OR' || upper === 'NOT') tokens.push({ type: 'logic', value: upper });
       else tokens.push({ type: 'name', value: s });
       i = j;
       continue;
@@ -87,7 +88,178 @@ function valuesEqual(a, b) {
 
 function valueLess(a, b) {
   if (typeof a === 'string' && typeof b === 'string') return a.trimEnd() < b.trimEnd();
-  return a < b;
+  return toNumber(a) < toNumber(b);
+}
+
+// ── numbers and text ─────────────────────────────────────────────────
+// These mirror the Python port's helpers exactly; tools/parity checks it.
+
+// What a number looks like as text: an optional sign, digits, an optional
+// decimal point and an optional exponent. Anything else ("12x", "", "1,5",
+// "0x10") is not a number, rather than being read as a prefix, 0 or NaN.
+const NUMBER_TEXT = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
+
+// Reads a value as a number: NaN if it isn't one.
+function toNumber(value) {
+  if (typeof value === 'number') return value;
+  if (typeof value === 'boolean') return value ? 1 : 0;
+  if (typeof value === 'string') {
+    const t = value.trim();
+    return NUMBER_TEXT.test(t) ? Number(t) : NaN;
+  }
+  return NaN;
+}
+
+// 10 to the power n, correctly rounded. Math.pow(10, 23) is not: it gives
+// 1.0000000000000001e23, where Python's float(10 ** 23) is 1e23.
+function pow10(n) { return Number('1e' + n); }
+
+// A number as text: a whole number prints every digit exactly; anything else
+// prints the shortest digits that round-trip, and never in exponent form.
+function formatNumber(n) {
+  if (!Number.isFinite(n)) throw new Error("That value is not a number, so it can't be turned into text");
+  if (Number.isInteger(n)) return BigInt(n).toString();
+  const text = String(n);
+  if (!/e/i.test(text)) return text;
+  const [mantissa, exp] = text.split(/e/i);
+  const negative = mantissa.startsWith('-');
+  const m = negative ? mantissa.slice(1) : mantissa;
+  const dot = m.indexOf('.');
+  const digits = m.replace('.', '');
+  const point = (dot === -1 ? m.length : dot) + parseInt(exp, 10);
+  const plain = point <= 0
+    ? '0.' + '0'.repeat(-point) + digits
+    : point >= digits.length ? digits + '0'.repeat(point - digits.length) : digits.slice(0, point) + '.' + digits.slice(point);
+  return (negative ? '-' : '') + plain;
+}
+
+function asString(v) {
+  if (typeof v === 'string') return v;
+  if (typeof v === 'boolean') return v ? 'true' : 'false';
+  if (typeof v === 'number') return formatNumber(v);
+  return '';
+}
+
+// ── built-in functions ───────────────────────────────────────────────
+// Each takes (name, args, firstVar): firstVar is the variable if the first
+// argument was a bare variable name, else null. %CHAR needs it for the
+// variable's declared decimals, which a value alone doesn't carry.
+
+function arity(name, args, lo, hi = lo) {
+  if (args.length < lo || args.length > hi) {
+    const want = lo === hi ? String(lo) : `${lo} to ${hi}`;
+    throw new Error(`${name} takes ${want} argument(s), got ${args.length}`);
+  }
+}
+
+// A number argument: text must look like one.
+function num(name, v) {
+  const n = toNumber(v);
+  if (typeof v === 'string' && Number.isNaN(n)) throw new Error(`${name}: '${v}' is not a number`);
+  return n;
+}
+
+// A position, length or count: must be a number; any fraction is dropped.
+function whole(name, v) {
+  const n = toNumber(v);
+  if (!Number.isFinite(n)) throw new Error(`${name}: ${typeof v === 'string' ? `'${v}'` : 'that value'} is not a whole number`);
+  return Math.trunc(n);
+}
+
+const truncTo = (n, dec) => { const f = pow10(dec); return Math.trunc(n * f) / f; };
+const halfAdjust = (n, dec) => { const f = pow10(dec); const r = Math.floor(Math.abs(n) * f + 0.5); return (n < 0 ? -r : r) / f; };
+
+// Text is counted in characters (code points), not UTF-16 units.
+const chars = (s) => Array.from(s);
+
+const strFn = (fn) => (name, args) => { arity(name, args, 1); return fn(asString(args[0])); };
+
+const BIFS = {
+  '%TRIM': strFn((s) => s.trim()),
+  '%TRIML': strFn((s) => s.trimStart()),
+  '%TRIMR': strFn((s) => s.trimEnd()),
+  '%UPPER': strFn((s) => s.toUpperCase()),
+  '%LOWER': strFn((s) => s.toLowerCase()),
+  '%LEN': (name, args) => { arity(name, args, 1); return chars(asString(args[0])).length; },
+  '%SUBST': (name, args) => {
+    arity(name, args, 2, 3);
+    const s = chars(asString(args[0]));
+    let start = whole(name, args[1]) - 1; // RPG %SUBST start is 1-based
+    const length = args.length <= 2 ? s.length - start : whole(name, args[2]);
+    start = Math.max(0, Math.min(start, s.length));
+    const end = Math.max(start, Math.min(start + length, s.length));
+    return s.slice(start, end).join('');
+  },
+  '%CHAR': (name, args, firstVar) => {
+    arity(name, args, 1);
+    const v = args[0];
+    if (typeof v === 'string') return v;
+    if (typeof v === 'boolean') return v ? '1' : '0';
+    if (firstVar && firstVar.type === 'N' && firstVar.dec) return Number(v).toFixed(firstVar.dec);
+    return formatNumber(Number(v));
+  },
+  '%DEC': (name, args) => decimal(name, args, truncTo),
+  '%DECH': (name, args) => decimal(name, args, halfAdjust),
+  '%INT': (name, args) => { arity(name, args, 1); return Math.trunc(num(name, args[0])); },
+  '%INTH': (name, args) => { arity(name, args, 1); return halfAdjust(num(name, args[0]), 0); },
+  '%ABS': (name, args) => { arity(name, args, 1); return Math.abs(num(name, args[0])); },
+  '%REM': (name, args) => {
+    arity(name, args, 2);
+    const a = num(name, args[0]), b = num(name, args[1]);
+    if (b === 0) throw new Error(`${name}: division by zero`);
+    return a - Math.trunc(a / b) * b;
+  },
+  '%DIV': (name, args) => {
+    arity(name, args, 2);
+    const a = num(name, args[0]), b = num(name, args[1]);
+    if (b === 0) throw new Error(`${name}: division by zero`);
+    return Math.trunc(a / b);
+  },
+  '%SQRT': (name, args) => {
+    arity(name, args, 1);
+    const n = num(name, args[0]);
+    if (n < 0) throw new Error('%SQRT of a negative number');
+    return Math.sqrt(n);
+  },
+  '%MIN': (name, args) => minMax(name, args),
+  '%MAX': (name, args) => minMax(name, args),
+  '%SCAN': (name, args) => {
+    arity(name, args, 2, 3);
+    const needle = chars(asString(args[0])), hay = chars(asString(args[1]));
+    const start = args.length === 3 ? whole(name, args[2]) : 1;
+    if (needle.length === 0 || start < 1) return 0;
+    for (let i = start - 1; i + needle.length <= hay.length; i++) {
+      if (needle.every((c, j) => hay[i + j] === c)) return i + 1;
+    }
+    return 0;
+  },
+  '%REPLACE': (name, args) => {
+    arity(name, args, 2, 4);
+    const repl = chars(asString(args[0])), src = chars(asString(args[1]));
+    const start = args.length >= 3 ? whole(name, args[2]) : 1;
+    const length = args.length === 4 ? whole(name, args[3]) : repl.length;
+    if (start < 1) throw new Error('%REPLACE: start must be 1 or more');
+    return [...src.slice(0, start - 1), ...repl, ...src.slice(start - 1 + length)].join('');
+  },
+};
+
+function decimal(name, args, round) {
+  arity(name, args, 3);
+  const n = num(name, args[0]);
+  const dec = whole(name, args[2]);
+  if (dec < 0 || dec > 63) throw new Error(`${name}: decimal positions must be 0 to 63, got ${dec}`);
+  return round(n, dec);
+}
+
+function minMax(name, args) {
+  arity(name, args, 2, 99);
+  const better = name === '%MIN' ? (a, b) => a < b : (a, b) => a > b;
+  if (args.every((a) => typeof a === 'string')) {
+    // compared without trailing blanks, but the original value comes back
+    return args.reduce((best, a) => (better(a.trimEnd(), best.trimEnd()) ? a : best));
+  }
+  const nums = args.map((a) => num(name, a));
+  return nums.reduce((best, n) => (better(n, best) ? n : best));
 }
 
 class Parser {
@@ -118,13 +290,22 @@ class Parser {
     return v;
   }
 
+  // NOT binds looser than a comparison and tighter than AND.
+  parseNot() {
+    if (this.peek() && this.peek().type === 'logic' && this.peek().value === 'NOT') {
+      this.next();
+      return !Boolean(this.parseNot());
+    }
+    return this.parseCompare();
+  }
+
   parseAnd() {
-    let v = this.parseCompare();
+    let v = this.parseNot();
     while (this.peek() && this.peek().type === 'logic' && this.peek().value === 'AND') {
       this.next();
       // Same reasoning as parseOr: always parse the right side, even
       // if the left side is already false.
-      const rhs = this.parseCompare();
+      const rhs = this.parseNot();
       v = Boolean(v) && Boolean(rhs);
     }
     return v;
@@ -171,8 +352,9 @@ class Parser {
     while (this.peek() && this.peek().type === 'op' && (this.peek().value === '*' || this.peek().value === '/')) {
       const op = this.next().value;
       const rhs = this.parseUnary();
-      if (op === '/' && Number(rhs) === 0) throw new Error('Division by zero');
-      v = op === '*' ? v * rhs : v / rhs;
+      const a = toNumber(v), b = toNumber(rhs);
+      if (op === '/' && b === 0) throw new Error('Division by zero');
+      v = op === '*' ? a * b : a / b;
     }
     return v;
   }
@@ -206,6 +388,8 @@ class Parser {
   resolveIndicatorOrConst(name) {
     if (name === '*ON') return true;
     if (name === '*OFF') return false;
+    if (name === '*BLANK' || name === '*BLANKS') return '';
+    if (name === '*ZERO' || name === '*ZEROS') return 0;
     if (name === '*INLR' || name === '*INRT') return Boolean(this.ctx.indicators[name.slice(3)]);
     const m = /^\*IN(\d\d)$/.exec(name);
     if (m) return Boolean(this.ctx.indicators[m[1]]);
@@ -213,24 +397,22 @@ class Parser {
   }
 
   parseFuncCall(name) {
+    const fn = BIFS[name];
+    if (!fn) throw new Error(`Unsupported RPG built-in: ${name}`);
     this.expectOp('(');
+    // Remember if the first argument was a bare variable: %CHAR needs its
+    // declared decimals.
+    const before = this.pos;
+    const firstToken = this.tokens[before];
     const args = [this.parseExpr()];
+    const firstVar = this.pos - before === 1 && firstToken && firstToken.type === 'name'
+      ? this.ctx.vars[firstToken.value.toLowerCase()] || null : null;
     while (this.peek() && this.peek().type === 'op' && this.peek().value === ':') {
       this.next();
       args.push(this.parseExpr());
     }
     this.expectOp(')');
-    switch (name) {
-      case '%TRIM': return String(args[0]).trim();
-      case '%LEN': return String(args[0]).length;
-      case '%SUBST': {
-        const str = String(args[0]);
-        const start = args[1] - 1; // RPG %SUBST start is 1-based
-        const len = args.length > 2 ? args[2] : str.length - start;
-        return str.substr(start, len);
-      }
-      default: throw new Error(`Unsupported RPG built-in: ${name}`);
-    }
+    return fn(name, args, firstVar);
   }
 
   readVar(name) {
@@ -260,4 +442,4 @@ function splitAssignment(src) {
   return { lvalue: src.slice(0, eq).trim(), rvalueSrc: src.slice(eq + 1).trim() };
 }
 
-module.exports = { evalExpr, splitAssignment };
+module.exports = { evalExpr, splitAssignment, toNumber, pow10, asString };

@@ -318,10 +318,6 @@ var (
 	assignInlrRe = regexp.MustCompile(`(?i)^\*INLR$`)
 )
 
-// numberText is what a number looks like as text. Anything else ("12x", "",
-// "1.2.3") is not a number, rather than being quietly read as 0.
-var numberText = regexp.MustCompile(`^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$`)
-
 // toNumber reads a value as a number, reporting whether it was one.
 func toNumber(v Value) (float64, bool) {
 	switch v.Kind {
@@ -333,12 +329,7 @@ func toNumber(v Value) (float64, bool) {
 		}
 		return 0, true
 	case 'S':
-		t := strings.TrimSpace(v.Str)
-		if !numberText.MatchString(t) {
-			return 0, false
-		}
-		f, err := strconv.ParseFloat(t, 64)
-		return f, err == nil && !math.IsInf(f, 0)
+		return parseNumberText(v.Str)
 	}
 	return 0, false
 }
@@ -358,7 +349,11 @@ func assign(vars map[string]*Var, indicators map[string]bool, lvalue string, rva
 		return fmt.Errorf("unknown RPG variable on assignment: %s", lvalue)
 	}
 	if v.Type == 'A' {
-		v.Value = StringValue(padEndTrunc(rvalue.AsString(), v.Length))
+		text, err := rvalue.text()
+		if err != nil {
+			return fmt.Errorf("%w (assigning to %s)", err, strings.TrimSpace(lvalue))
+		}
+		v.Value = StringValue(padEndTrunc(text, v.Length))
 	} else {
 		// Truncate-on-assign (no rounding) -- the real RPG default, and
 		// what DIV/MVR-based modulo relies on for boundedness.
@@ -370,7 +365,7 @@ func assign(vars map[string]*Var, indicators map[string]bool, lvalue string, rva
 			}
 			return fmt.Errorf("%s is not a number, so it can't be put in the numeric field %s", what, strings.TrimSpace(lvalue))
 		}
-		factor := math.Pow(10, float64(v.Dec))
+		factor := pow10(v.Dec)
 		v.Value = NumberValue(math.Trunc(n*factor) / factor)
 	}
 	return nil

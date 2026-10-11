@@ -1,6 +1,7 @@
 package rpgle_test
 
 import (
+	"math"
 	"strings"
 	"testing"
 
@@ -245,4 +246,151 @@ func TestDivisionByZeroIsAnErrorOrdinaryDivisionStillWorks(t *testing.T) {
 	if got := mustEval(t, "0 / 5", emptyCtx()); got.Num != 0 {
 		t.Errorf("0 / 5 = %v", got.Num)
 	}
+}
+
+// ── built-in functions (parity with the Python port) ────────────────────
+// Every case here is also in python/tests/test_expr.py and tools/parity.
+
+func evalVars(t *testing.T, src string, vars map[string]*rpgle.Var) rpgle.Value {
+	t.Helper()
+	return mustEval(t, src, &rpgle.Context{Vars: vars, Indicators: map[string]bool{}})
+}
+
+type bifCase struct {
+	src  string
+	want any // float64, string or bool
+}
+
+func checkCases(t *testing.T, cases []bifCase, vars map[string]*rpgle.Var) {
+	t.Helper()
+	if vars == nil {
+		vars = map[string]*rpgle.Var{}
+	}
+	for _, c := range cases {
+		v := evalVars(t, c.src, vars)
+		switch w := c.want.(type) {
+		case float64:
+			if v.Kind != 'N' || v.Num != w {
+				t.Errorf("%s = %+v, want %v", c.src, v, w)
+			}
+		case string:
+			if v.Kind != 'S' || v.Str != w {
+				t.Errorf("%s = %+v, want %q", c.src, v, w)
+			}
+		case bool:
+			if v.Kind != 'B' || v.Bool != w {
+				t.Errorf("%s = %+v, want %v", c.src, v, w)
+			}
+		}
+	}
+}
+
+func checkFails(t *testing.T, sources []string, fragment string) {
+	t.Helper()
+	for _, src := range sources {
+		_, err := rpgle.EvalExpr(src, emptyCtx())
+		if err == nil {
+			t.Errorf("%s: want an error, got none", src)
+		} else if fragment != "" && !strings.Contains(err.Error(), fragment) {
+			t.Errorf("%s: error %q should mention %q", src, err, fragment)
+		}
+	}
+}
+
+func TestNumericBuiltIns(t *testing.T) {
+	checkCases(t, []bifCase{
+		{"%abs(-5)", 5.0}, {"%abs(3)", 3.0}, {"%int(7.9)", 7.0}, {"%int(-7.9)", -7.0},
+		{"%inth(7.5)", 8.0}, {"%inth(-7.5)", -8.0}, {"%dec('12.345' : 5 : 2)", 12.34}, {"%dech('12.345' : 5 : 2)", 12.35},
+		{"%rem(17 : 5)", 2.0}, {"%div(17 : 5)", 3.0}, {"%sqrt(16)", 4.0}, {"%min(4 : 2 : 9)", 2.0}, {"%max(4 : 2 : 9)", 9.0},
+		{"%min('b' : 'a')", "a"}, {"%rem(-17 : 5)", -2.0}, {"%div(-17 : 5)", -3.0},
+	}, nil)
+}
+
+func TestTextBuiltIns(t *testing.T) {
+	checkCases(t, []bifCase{
+		{"%upper('abC')", "ABC"}, {"%lower('abC')", "abc"}, {"%triml('  a  ')", "a  "}, {"%trimr('  a  ')", "  a"},
+		{"%trim('  a  ')", "a"}, {"%scan('lo' : 'hello world')", 4.0}, {"%scan('o' : 'hello world' : 6)", 8.0},
+		{"%scan('zz' : 'hello')", 0.0}, {"%replace('XY' : 'hello' : 2 : 3)", "hXYo"}, {"%replace('XY' : 'hello' : 3 : 0)", "heXYllo"},
+		{"%replace('XY' : 'hello')", "XYllo"}, {"%subst('hello' : 2 : 3)", "ell"}, {"%len('abc')", 3.0},
+	}, nil)
+}
+
+func TestCharUsesABareVariablesDeclaredDecimalsAnExpressionDoesNot(t *testing.T) {
+	vars := map[string]*rpgle.Var{
+		"money": {Type: 'N', Length: 9, Dec: 2, Value: rpgle.NumberValue(5)},
+		"whole": {Type: 'N', Length: 5, Dec: 0, Value: rpgle.NumberValue(5)},
+	}
+	checkCases(t, []bifCase{
+		{"%char(money)", "5.00"}, {"%char(whole)", "5"}, {"%char(money + 1)", "6"}, {"%char('x')", "x"},
+		{"%char(*on)", "1"}, {"%char(*off)", "0"},
+	}, vars)
+}
+
+func TestBuiltInsAgreeOnCharactersNotBytesOrUTF16Units(t *testing.T) {
+	checkCases(t, []bifCase{
+		{"%len('café')", 4.0}, {"%len('\U0001f600x')", 2.0}, {"%subst('cafés' : 4 : 2)", "és"},
+		{"%scan('é' : 'café')", 4.0}, {"%replace('\U0001f600' : 'abc' : 2 : 1)", "a\U0001f600c"},
+	}, nil)
+}
+
+func TestSubstClampsInsteadOfFailing(t *testing.T) {
+	checkCases(t, []bifCase{
+		{"%subst('hello' : 0 : 2)", "he"}, {"%subst('hello' : -3 : 2)", "he"}, {"%subst('hello' : 9)", ""},
+		{"%subst('hello' : 3 : 99)", "llo"}, {"%subst('hello' : 3 : -1)", ""}, {"%subst('hello' : 2)", "ello"},
+	}, nil)
+}
+
+func TestNumbersBecomeTextInPlainDecimalNeverExponentForm(t *testing.T) {
+	checkCases(t, []bifCase{
+		{"%char(0.0000001)", "0.0000001"}, {"%char(0.00001234)", "0.00001234"},
+		{"%char(10000000000000000000000)", "10000000000000000000000"}, {"%char(123456789012345678)", "123456789012345680"},
+		{"%char(0.1 + 0.2)", "0.30000000000000004"}, {"%char(-2.5)", "-2.5"}, {"%char(7)", "7"},
+	}, nil)
+}
+
+func TestAPositionOrLengthThatIsNotAWholeNumberIsAnError(t *testing.T) {
+	checkFails(t, []string{
+		"%dec('5' : 5 : 'x')", "%scan('a' : 'abc' : 'x')", "%replace('a' : 'bcd' : 'x')", "%replace('a' : 'bcd' : 1 : 'x')",
+		"%subst('abc' : 'x')", "%subst('abc' : 1 : 'x')",
+	}, "not a whole number")
+}
+
+func TestDecimalPositionsAreLimitedToWhatRPGAllows(t *testing.T) {
+	checkFails(t, []string{"%dec(1 : 5 : 64)", "%dec(1 : 5 : -1)", "%dech(1 : 5 : 400)"}, "0 to 63")
+	checkCases(t, []bifCase{{"%dec('12.345' : 5 : 0)", 12.0}, {"%dec(1 : 63 : 63)", 1.0}}, nil)
+}
+
+func TestWrongArgumentCountsAndUnknownFunctionsAreErrors(t *testing.T) {
+	checkFails(t, []string{"%len('a' : 'b')", "%subst('a')", "%scan('a')", "%replace('a')", "%min(1)"}, "argument")
+	checkFails(t, []string{"%trim()", "%abs()"}, "") // no argument at all is a parse error
+	checkFails(t, []string{"%nosuch(1)"}, "unsupported RPG built-in")
+}
+
+func TestBuiltInErrorsNotANumberDivideByZeroNegativeSquareRoot(t *testing.T) {
+	checkFails(t, []string{"%dec('abc' : 5 : 2)", "%int('12x')", "%abs('')"}, "is not a number")
+	checkFails(t, []string{"%rem(1 : 0)", "%div(1 : 0)"}, "division by zero")
+	checkFails(t, []string{"%sqrt(-1)"}, "negative")
+}
+
+func TestNotBindsLooserThanComparisonAndTighterThanAnd(t *testing.T) {
+	checkCases(t, []bifCase{
+		{"not 1 = 2", true}, {"not 1 = 1 or 2 = 2", true}, {"not (1 = 1 and 2 = 2)", false}, {"not not 1 = 1", true},
+		{"not 1 = 1 and 2 = 2", false},
+	}, nil)
+}
+
+func TestBlanksAndZerosAreFigurativeConstants(t *testing.T) {
+	checkCases(t, []bifCase{
+		{"*blanks", ""}, {"*blank", ""}, {"*zeros", 0.0}, {"*zero", 0.0}, {"*blanks = *blanks", true},
+	}, nil)
+}
+
+func TestOnlyPlainNumbersAreNumbersInArithmetic(t *testing.T) {
+	// '0x10' * 1 is 16 in JS and a NaN in Python; strict everywhere now
+	for _, src := range []string{"'0x10' * 1", "'1_000' * 1", "'inf' * 1"} {
+		if v := mustEval(t, src, emptyCtx()); !math.IsNaN(v.Num) {
+			t.Errorf("%s = %+v, want NaN (not a number)", src, v)
+		}
+	}
+	checkCases(t, []bifCase{{"'5' * 2", 10.0}, {"' 7 ' * 1", 7.0}, {"'1e2' * 1", 100.0}}, nil)
 }
