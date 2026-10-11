@@ -30,6 +30,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
 
+from ._helpers import is_object_name
 from .errors import RpgleError
 from .prtf import PrintFile, PrintFormat, edit_number, parse_prtf
 from .rpgle import Program
@@ -181,6 +182,8 @@ class Spool:
             if (fs.device or "").upper() != "PRINTER":
                 continue
             key = fs.name.upper()
+            if not is_object_name(fs.name):
+                raise RpgleError(f"{fs.name!r} is not a valid printer file name")
             if (fs.format or "").upper() != "E":
                 raise RpgleError(f"{key}: only externally described printer files (F-spec column 22 = E) are supported")
             if key in self.defs:

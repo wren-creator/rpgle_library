@@ -17,11 +17,18 @@ goroutine + channel pair specifically because Go has no generators.
 
 Supported opcode subset (see docs/LANGUAGE.md for the full RPGLE
 subset this library implements, and what's explicitly out of scope):
-EVAL, IF/ELSE/ENDIF, DOW/ENDDO, LEAVE, SELECT/WHEN/OTHER/ENDSL,
-EXSR/BEGSR/ENDSR, EXFMT, DIV/MVR, RETURN, and the DISK file opcodes
-(CHAIN, SETLL, SETGT, READ, READE, READP, READPE, WRITE, UPDATE,
-DELETE, plus KLIST/KFLD) which live in fileops.py. Expression evaluation
-(arithmetic, comparisons, %TRIM/%LEN/%SUBST) lives in expr.py.
+EVAL, IF/ELSEIF/ELSE/ENDIF, DOW, DOU, FOR, ITER, LEAVE,
+SELECT/WHEN/OTHER/ENDSL, EXSR/BEGSR/ENDSR, EXFMT, DIV/MVR, RETURN,
+CALLP and procedures, CALL/PARM/PLIST between programs, CLEAR, SORTA,
+and the file opcodes (CHAIN, SETLL, SETGT, READ, READE, READP, READPE,
+WRITE, UPDATE, DELETE, plus KLIST/KFLD) which live in fileops.py and
+cover DISK and PRINTER files. Expression evaluation, the built-in
+functions and arrays live in expr.py.
+
+The run loop is _Runtime.exec(frame): one generator per running body of
+code (the main line, each procedure call, each called program), so
+recursion gets fresh locals and a screen shown deep in a call still
+reaches whoever is driving run_program.
 
 DIV/MVR (not EVAL-expression division) is the classic RPG idiom for
 modulo: RPG has no %REM until well past V4R3, and relying on
@@ -505,6 +512,15 @@ def compile_program(statements) -> Compiled:
             if op != "PLIST":
                 current_plist = None
 
+    # A block left open has jump targets that were never filled in; running it
+    # would crash on a missing address, so say so now.
+    if if_stack:
+        raise RpgleError("IF with no ENDIF")
+    if dow_stack:
+        kind = dow_stack[-1]["kind"]
+        raise RpgleError(f"{kind} loop with no {'ENDFOR' if kind == 'FOR' else 'ENDDO'}")
+    if sel_stack:
+        raise RpgleError("SELECT with no ENDSL")
     return Compiled(
         instrs=instrs, subroutines=subroutines, klists=klists, entry_params=entry_params, plists=plists
     )
@@ -558,10 +574,10 @@ def _assign(variables: dict[str, Var], indicators: dict[str, bool], lvalue: str,
     v = variables.get(key)
     if v is None:
         raise RpgleError(f"Unknown RPG variable on assignment: {lvalue}")
-    _store(v, rvalue)
+    _store(v, rvalue, lvalue.strip())
 
 
-def _store(v: Var, rvalue: Any) -> None:
+def _store(v: Var, rvalue: Any, name: str = "") -> None:
     """Puts a value into a variable the way RPG assignment does: padded
     or truncated to a character field's length, truncated (not rounded)
     to a number's decimals.
@@ -575,8 +591,12 @@ def _store(v: Var, rvalue: Any) -> None:
     else:
         # Truncate-on-assign (no rounding) -- the real RPG default, and
         # what DIV/MVR-based modulo relies on for boundedness.
+        number = as_float(rvalue)
+        if math.isnan(number) or math.isinf(number):
+            what = f"{rvalue!r}" if isinstance(rvalue, str) else "that value"
+            raise RpgleError(f"{what} is not a number, so it can't be put in the numeric field{' ' + name if name else ''}")
         factor = 10**v.dec
-        v.value = math.trunc(as_float(rvalue) * factor) / factor
+        v.value = math.trunc(number * factor) / factor
 
 
 def _eval_assign(lvalue: str, rvalue_src: str, ctx: Context, variables: Any, indicators: dict[str, bool]) -> None:
@@ -762,6 +782,9 @@ class ScreenData:
     cursor: Cursor
     keys: dict[str, str]
     input_map: dict[int, str]
+    # Names of the input fields that hold numbers, so a front end can refuse
+    # letters as they are typed (a 5250 never lets you type them).
+    numeric_fields: frozenset = frozenset()
 
 
 @dataclass
@@ -1163,6 +1186,8 @@ class _Runtime:
             elif op == "DIV":
                 f1 = _numeric_operand(variables, instr.factor1)
                 f2 = _numeric_operand(variables, instr.factor2)
+                if f2 == 0:
+                    raise RpgleError("DIV: division by zero")
                 quotient = math.trunc(f1 / f2)
                 last_div_remainder = f1 - quotient * f2
                 _assign(variables, indicators, instr.result, float(quotient))
@@ -1184,6 +1209,9 @@ class _Runtime:
                     cursor=rendered.cursor,
                     keys=fmt.keys,
                     input_map=rendered.input_map,
+                    numeric_fields=frozenset(
+                        n for n in rendered.input_map.values() if getattr(variables.get(n), "type", "") == "N"
+                    ),
                 )
 
                 # Response indicators reset before applying this read's key,
@@ -1198,7 +1226,10 @@ class _Runtime:
 
                 for field_name in rendered.input_map.values():
                     if resume and resume.values and field_name in resume.values:
-                        _assign(variables, indicators, field_name, resume.values[field_name])
+                        typed = resume.values[field_name]
+                        if variables[field_name].type == "N" and not str(typed).strip():
+                            typed = "0"  # a blank numeric field reads as zero
+                        _assign(variables, indicators, field_name, typed)
                 pc += 1
 
             elif op == "SORTA":

@@ -7,6 +7,10 @@ for a single shared implementation.
 
 from __future__ import annotations
 
+import re
+
+from .errors import RpgleError
+
 
 def col(line: str, a: int, b: int) -> str:
     """A 1-indexed, inclusive column range, bounds-safe, trimmed.
@@ -38,3 +42,28 @@ def pad_start_zero(s: str, length: int) -> str:
     if len(s) >= length:
         return s
     return "0" * (length - len(s)) + s
+
+
+_OBJECT_NAME = re.compile(r"^[A-Za-z_$#@][A-Za-z0-9_$#@]*$")
+
+
+def is_object_name(name: str) -> bool:
+    """An IBM i object name: letters, digits and _ $ # @, not starting with a digit.
+
+    File and program names become file names on disk (custmast.pf,
+    custlookup.rpgle), so they must never contain a path separator or a dot.
+    """
+    return bool(_OBJECT_NAME.match(name))
+
+
+def digits(text: str, what: str, owner: str) -> int:
+    """A numeric column of a spec or DDS line: blank is 0, anything else must
+    be whole digits. Malformed input is an RpgleError naming the field, never
+    a ValueError out of int().
+    """
+    text = text.strip()
+    if not text:
+        return 0
+    if not text.isdigit():
+        raise RpgleError(f"{owner}: {what} {text!r} is not a number")
+    return int(text)

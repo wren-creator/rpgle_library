@@ -39,6 +39,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
+from ._helpers import is_object_name
 from .errors import RpgleError
 from .expr import split_top
 from .rpgle import DSpec, DsSpec, FileSpec, ParamSpec, ProcSpec, Program, ProtoSpec, Statement
@@ -329,7 +330,11 @@ def _parse_dcl_c(scope, rest: str) -> None:
 def _parse_dcl_f(prog: Program, rest: str) -> None:
     tokens = split_top(rest.replace("\t", " "), " ")
     tokens = [t for t in tokens if t]
+    if not tokens:
+        raise RpgleError("dcl-f needs a file name")
     name, device, usage, keyed, oflind = tokens[0], None, [], False, None
+    if not is_object_name(name):
+        raise RpgleError(f"dcl-f {name!r}: not a valid file name (letters, digits and _ $ # @ only)")
     for tok in tokens[1:]:
         low = tok.lower()
         if low in ("disk", "workstn", "printer"):

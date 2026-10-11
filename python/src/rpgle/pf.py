@@ -31,7 +31,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
-from ._helpers import col
+from ._helpers import col, digits
 from .errors import RpgleError
 
 
@@ -107,9 +107,9 @@ def parse_pf(file_name: str, source: str) -> PhysicalFile:
         pf.fields.append(
             PfField(
                 name=name,
-                length=int(length_s) if length_s else 0,
+                length=digits(length_s, "length", name),
                 dtype="N" if numeric else "A",
-                dec=int(dec_s) if dec_s else 0,
+                dec=digits(dec_s, "decimal positions", name),
             )
         )
 

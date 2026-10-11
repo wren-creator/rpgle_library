@@ -89,6 +89,8 @@ def as_float(v: Any) -> float:
 
 
 def _format_number_for_string(n: float) -> str:
+    if math.isnan(n) or math.isinf(n):
+        raise RpgleError("That value is not a number, so it can't be turned into text")
     if n == math.trunc(n) and not math.isinf(n):
         return str(int(n))
     return repr(n)
@@ -511,6 +513,8 @@ class _Parser:
         while (t := self._peek()) and t.type == "op" and t.value in ("*", "/"):
             op = self._next().value
             rhs = self._parse_unary()
+            if op == "/" and as_float(rhs) == 0:
+                raise RpgleError("Division by zero")
             v = as_float(v) * as_float(rhs) if op == "*" else as_float(v) / as_float(rhs)
         return v
 
@@ -518,7 +522,10 @@ class _Parser:
         t = self._peek()
         if t and t.type == "op" and t.value == "-":
             self._next()
-            return -as_float(self._parse_unary())
+            operand = self._parse_unary()
+            if isinstance(operand, str):
+                raise RpgleError("Can't negate text; convert it with %DEC or %INT first")
+            return -as_float(operand)
         return self._parse_primary()
 
     def _parse_primary(self) -> Any:

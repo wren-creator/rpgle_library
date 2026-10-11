@@ -162,6 +162,8 @@ class _Expander:
             raise RpgleError(f"{where}: /COPY needs a member name")
         quoted = re.match(r"^(['\"])(.+?)\1", spec)
         spec = quoted.group(2) if quoted else spec.split()[0]
+        if any(ord(c) < 32 for c in spec):
+            raise RpgleError(f"{where}: /COPY member name has a control character in it")
         found = self._find(spec, bool(quoted), here)
         if found is None:
             tried = ", ".join(str(d) for d in self._search_dirs(here))

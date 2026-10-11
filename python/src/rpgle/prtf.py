@@ -27,7 +27,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 
-from ._helpers import col
+from ._helpers import col, digits
 from .dds import IndicatorCond, _parse_indicators, _parse_keywords
 from .errors import RpgleError
 
@@ -173,6 +173,8 @@ def parse_prtf(file_name: str, source: str) -> PrintFile:
         numeric = dtype in ("P", "S", "B", "F") or bool(dec_s)
         if not length_s:
             raise RpgleError(f"{current.name}: field {name} needs a length (columns 30-34)")
+        length = digits(length_s, "length", name)
+        dec = digits(dec_s, "decimal positions", name)
         current.fields.append(
             PrintField(
                 kind="field",
@@ -180,9 +182,9 @@ def parse_prtf(file_name: str, source: str) -> PrintFile:
                 line=ln,
                 col=pos,
                 name=name.upper(),
-                length=int(length_s),
+                length=length,
                 dtype="N" if numeric else "A",
-                dec=int(dec_s) if dec_s else 0,
+                dec=dec,
                 edtcde=edtcde,
                 pagnbr=pagnbr,
                 indicators=indicators,

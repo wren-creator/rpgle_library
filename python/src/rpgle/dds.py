@@ -32,7 +32,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 
-from ._helpers import col
+from ._helpers import col, digits
 
 _INDICATOR_RE = re.compile(r"(N?)(\d{2})")
 _KEYWORD_RE = re.compile(r"([A-Z0-9]+)(\(([^)]*)\))?")
@@ -132,7 +132,7 @@ def parse_dds(source: str) -> DDS:
             for kw_name, params in _parse_keywords(keyword_area):
                 m = _CF_CA_RE.match(kw_name)
                 if m and params and params[0]:
-                    current.keys[f"F{int(m.group(1))}"] = params[0]
+                    current.keys[f"F{int(m.group(1))}"] = params[0]  # group(1) is two digits by the regex
             continue
 
         if current is None:
@@ -143,8 +143,8 @@ def parse_dds(source: str) -> DDS:
         if not line_no or not pos_no:
             continue  # not a locatable field/constant line
 
-        row = int(line_no) - 1  # convert to 0-indexed, matching screen renderers
-        dcol = int(pos_no) - 1
+        row = digits(line_no, "line", name or "a constant") - 1  # convert to 0-indexed, matching screen renderers
+        dcol = digits(pos_no, "position", name or "a constant") - 1
         indicators = _parse_indicators(line)
 
         if not name:
@@ -164,9 +164,9 @@ def parse_dds(source: str) -> DDS:
                 name=name,
                 row=row,
                 col=dcol,
-                length=int(length_s) if length_s else 0,
+                length=digits(length_s, "length", name),
                 dtype=dtype or ("N" if dec_s else "A"),
-                dec=int(dec_s) if dec_s else None,
+                dec=digits(dec_s, "decimal positions", name) if dec_s else None,
                 usage=usage or "O",  # O=output, I=input, B=both
                 indicators=indicators,
             )

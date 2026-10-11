@@ -1,12 +1,19 @@
 """
 rpgle.py
 ─────────────────────────────────────────────────────────────────
-Fixed-form RPG IV tokenizer, scoped to the F/D/C-spec subset this
-library's interpreter supports (see interpreter.py's header for the
-exact opcode list). This module only tokenizes columns into spec
-records in source order -- control-flow resolution (matching
-IF/ELSE/ENDIF, DOW/ENDDO, SELECT/WHEN/OTHER/ENDSL, BEGSR/ENDSR)
-happens in interpreter.py's compile_program step.
+The records every parser produces (Program, FileSpec, DSpec, DsSpec,
+ProcSpec, Statement ...) and the fixed-form tokenizer, scoped to the
+F/D/C-spec subset this library's interpreter supports (see
+interpreter.py's header for the opcode list). parse_rpgle() is the
+front door for both forms: it expands /COPY first (include.py), then
+sends **FREE source to freeform.py, which fills in the same records.
+
+This module only tokenizes columns into spec records in source order --
+control-flow resolution (matching IF/ELSE/ENDIF, DOW/ENDDO,
+SELECT/WHEN/OTHER/ENDSL, BEGSR/ENDSR) happens in interpreter.py's
+compile_program step. O-specs and a DIM keyword are refused outright:
+silently ignoring either would run a program and print nothing, or
+treat an array as one value.
 
 Column positions are IBM's documented fixed-form layout (verified
 against the ILE RPG Language Reference, SC09-2508):
@@ -32,7 +39,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Optional
 
-from ._helpers import col
+from ._helpers import col, digits, is_object_name
 from .errors import RpgleError
 
 _INZ_RE = re.compile(r"INZ\(([^)]*)\)", re.IGNORECASE)
@@ -225,8 +232,11 @@ def _parse(source: str) -> Program:
             )
 
         if spec_type == "F":
+            file_name = col(line, 7, 16)
+            if not is_object_name(file_name):
+                raise RpgleError(f"{file_name!r} is not a valid file name (letters, digits and _ $ # @ only)")
             fs = FileSpec(
-                name=col(line, 7, 16),
+                name=file_name,
                 type=col(line, 17, 17),
                 designation=col(line, 18, 18),
                 format=col(line, 22, 22),
@@ -260,8 +270,8 @@ def _parse(source: str) -> Program:
                 DSpec(
                     name=name,
                     deftype=deftype,
-                    length=int(length_s) if length_s else 0,
-                    dec=int(dec_s) if dec_s else None,
+                    length=digits(length_s, "length", name),
+                    dec=digits(dec_s, "decimal positions", name) if dec_s else None,
                     init=init,
                 )
             )

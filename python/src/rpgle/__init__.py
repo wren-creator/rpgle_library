@@ -1,9 +1,12 @@
 """
 rpgle
 ─────────────────────────────────────────────────────────────────
-A zero-dependency RPG IV (RPGLE) and DDS parser/interpreter.
+A zero-dependency RPG IV (RPGLE) and DDS parser/interpreter, with a
+runtime that needs no IBM i: fixed-form and free-form source, DISK files
+on SQLite, /COPY includes, calls between programs and printer files.
+From a terminal, `rpgle run program.rpgle` does it all (see the README).
 
-Quick start:
+The smallest use, a program with screens and no files:
     from rpgle import parse_dds, parse_rpgle, run_program, Resume
 
     dds = parse_dds(dspf_source)
@@ -22,7 +25,7 @@ Quick start:
 from .database import Database, FileHandle
 from .dds import DDS, Field, Format, IndicatorCond, parse_dds
 from .errors import RpgleError
-from .expr import Context, Var, as_bool, as_float, as_string, eval_expr, split_assignment
+from .expr import ArrayVar, Context, Var, as_bool, as_float, as_string, eval_expr, split_assignment
 from .interpreter import (
     Compiled,
     Cursor,
@@ -36,8 +39,11 @@ from .interpreter import (
     render_format,
     run_program,
 )
-from .loader import CallError, LoadedProgram, ProgramLoader
+from .include import expand_includes
+from .loader import CallError, LoadedProgram, ProgramLoader, load_pfs
 from .pf import PfField, PhysicalFile, parse_pf
+from .prtf import PrintFile, parse_prtf
+from .spool import Spool
 from .rpgle import DSpec, FileSpec, Program, Statement, parse_rpgle
 
 __all__ = [
@@ -56,10 +62,17 @@ __all__ = [
     # database.py
     "Database",
     "FileHandle",
+    # include.py
+    "expand_includes",
     # loader.py
     "ProgramLoader",
     "LoadedProgram",
     "CallError",
+    "load_pfs",
+    # prtf.py / spool.py
+    "PrintFile",
+    "parse_prtf",
+    "Spool",
     # pf.py
     "PhysicalFile",
     "PfField",
@@ -67,6 +80,7 @@ __all__ = [
     # expr.py
     "Context",
     "Var",
+    "ArrayVar",
     "eval_expr",
     "split_assignment",
     "as_bool",

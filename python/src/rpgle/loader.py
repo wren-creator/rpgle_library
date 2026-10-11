@@ -24,12 +24,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
 
+from ._helpers import is_object_name
 from .dds import DDS, parse_dds
 from .errors import RpgleError
 from .pf import PhysicalFile, parse_pf
 from .rpgle import Program, parse_rpgle
 
-_NAME = re.compile(r"^[A-Za-z_$#@][A-Za-z0-9_$#@]*$")
 _PROGRAM_EXTENSIONS = (".rpgle", ".rpg", ".sqlrpgle")
 
 
@@ -47,12 +47,14 @@ def program_key(target: str) -> str:
     """
     name = target.strip().strip("'\"").strip().replace("\\", "/")
     name = name.rsplit("/", 1)[-1] if "/" in name else name
-    if not _NAME.match(name):
+    if not is_object_name(name):
         raise CallError(f"{target.strip()!r} is not a program name")
     return name.upper()
 
 
 def find_pf(name: str, directories: Iterable[Path]) -> Path:
+    if not is_object_name(name):
+        raise RpgleError(f"{name!r} is not a valid file name")
     dirs = list(directories)
     for d in dirs:
         for candidate in (name.lower(), name.upper(), name):
@@ -80,6 +82,7 @@ def find_dds(prog: Program, path: Path, directories: Iterable[Path]) -> DDS:
     """
     names = [prog.file.name] if prog.file.name else []
     names.append(path.stem)
+    names = [n for n in names if is_object_name(n)]  # a name becomes a file name: no separators, no dots
     for d in [path.parent, *directories]:
         for n in names:
             for candidate in (n.lower(), n.upper(), n):

@@ -83,6 +83,18 @@ def _input_fields(screen: ScreenData) -> list[tuple[str, str]]:
     return out
 
 
+def _is_number(text: str) -> bool:
+    try:
+        float(text.strip())
+    except ValueError:
+        return False
+    return True
+
+
+def _is_function_key(line: str, screen: ScreenData) -> bool:
+    return _as_function_key(line, screen) is not None
+
+
 def _as_function_key(line: str, screen: ScreenData) -> Optional[str]:
     m = _FKEY.match(line.strip())
     if not m:
@@ -137,13 +149,18 @@ def _drive_loop(gen, stdin: TextIO, stdout: TextIO, out) -> int:
         prompts = fields or [("", "")]
         for name, current in prompts:
             label = f"{name} [{current}]" if name else "Enter"
-            stdout.write(f"{label}> ")
-            stdout.flush()
-            line = stdin.readline()
-            if line == "":
-                out("\n(end of input)")
-                return 0
-            line = line.rstrip("\n")
+            while True:
+                stdout.write(f"{label}> ")
+                stdout.flush()
+                line = stdin.readline()
+                if line == "":
+                    out("\n(end of input)")
+                    return 0
+                line = line.rstrip("\n")
+                if name in screen.numeric_fields and line.strip() and not _is_function_key(line, screen) and not _is_number(line):
+                    out(f"  {name} takes a number; '{line.strip()}' isn't one. Try again.")
+                    continue
+                break
             fkey = _as_function_key(line, screen)
             if fkey:
                 key = fkey
