@@ -10,9 +10,9 @@ A patch release (1.1.1) once published.
 
 - A key or record value for a `DISK` file follows the same rule as typing into a number field. Text that isn't a number (`'abc'`) used to escape as a raw `ValueError` instead of a clean error, and a blank number key crashed the same way; a blank now reads as zero. A number used as a character key reads the way RPG shows it, so `CHAIN 20` finds the key `20`, not `20.0`.
 
-## Unreleased (JS and Go)
+## 1.1.0 (JS and Go), 2026-10-11
 
-Behavior fixes, brought over from the Python port so all three agree, and then `DISK` files. Together that is new API with nothing broken, so the next release of each is a minor one (1.1.0). Each is covered by tests that mirror the Python ones, and `tools/parity/check.py` (new, and run in CI) checks the three ports against the same 119 cases.
+Behavior fixes, brought over from the Python port so all three agree, and then `DISK` files. Together that is new API with nothing broken, so this is a minor release for both. Each is covered by tests that mirror the Python ones, and `tools/parity/check.py` (new, and run in CI) checks the three ports against the same 119 cases.
 
 ### Fixed
 

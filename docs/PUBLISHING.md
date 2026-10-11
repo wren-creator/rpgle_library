@@ -51,14 +51,16 @@ Go modules don't have a separate "publish" step — the module proxy (`proxy.gol
 # Tag the commit — must match the JS version for a coordinated release,
 # but the Go module can also be tagged independently if it needs its
 # own fix that doesn't touch the JS side.
-git tag v1.0.1
-git push origin v1.0.1
+# The module lives in the go/ folder, so its tag needs that prefix:
+# the proxy will not find a plain v1.0.1 for it.
+git tag go/v1.0.1
+git push origin go/v1.0.1
 ```
 
 Consumers then get it with:
 
 ```bash
-go get github.com/wren-creator/rpgle_library/go@v1.0.1
+go get github.com/wren-creator/rpgle_library/go@v1.0.1   # resolves the go/v1.0.1 tag
 ```
 
 No credentials or CI step are required for this — the proxy fetches directly from the public git repo the first time anyone requests that tag.
@@ -120,4 +122,4 @@ It needs `python3`, `node` and `go` on the PATH. Each port has a small runner (`
 
 **When you change a behavior in one port, add a case to `cases.json` first** and watch the check fail in the ports you haven't changed yet. That failure is the point: it is how a behavior difference gets found instead of shipped. When you port a feature, add its cases the same way.
 
-**Versions today.** The Python port is at **1.1.0**: it gained a great deal (new opcodes, DDS support and API), a minor bump under the policy above. The JS and Go ports are still **1.0.0** but have unreleased behavior fixes and, now, DISK files (see the changelog). New API that doesn't break anything is a minor bump, so publish them as **1.1.0** (the Go module is released by tag, `v1.1.0`). **Python versions:** `requires-python` is `>=3.12`; the test suite and CI run on 3.12, 3.13 and 3.14, and nothing older has been tested.
+**Versions today.** The Python port is at **1.1.0**: it gained a great deal (new opcodes, DDS support and API), a minor bump under the policy above. The JS and Go ports are still **1.0.0** but have unreleased behavior fixes and, now, DISK files (see the changelog). New API that doesn't break anything is a minor bump, so publish them as **1.1.0** (the Go module is released by the tag `go/v1.1.0`, next to the plain `v1.1.0` for npm). **Python versions:** `requires-python` is `>=3.12`; the test suite and CI run on 3.12, 3.13 and 3.14, and nothing older has been tested.
