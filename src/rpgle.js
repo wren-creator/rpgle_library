@@ -27,20 +27,11 @@
 
 'use strict';
 
-function col(line, a, b) {
-  return (line.slice(a - 1, b) || '').trim();
-}
-
-// A numeric column of a spec line: blank is 0, anything else must be whole
-// digits. parseInt('5A') would quietly give 5, so check first.
-function digits(text, what, owner) {
-  if (!text) return 0;
-  if (!/^\d+$/.test(text)) throw new Error(`${owner}: ${what} '${text}' is not a number`);
-  return parseInt(text, 10);
-}
+const { col, digits, isObjectName } = require('./util');
 
 function parseRpgle(source) {
-  const file = { name: null, device: null, format: null };
+  let file = { name: null, device: null, format: null }; // the WORKSTN file: the first one declared
+  const files = []; // every F-spec, in source order
   const dspecs = [];
   const statements = [];
 
@@ -57,11 +48,21 @@ function parseRpgle(source) {
     }
 
     if (specType === 'F') {
-      file.name = col(line, 7, 16);
-      file.type = col(line, 17, 17);
-      file.designation = col(line, 18, 18);
-      file.format = col(line, 22, 22);
-      file.device = col(line, 36, 42);
+      const fileName = col(line, 7, 16);
+      if (!isObjectName(fileName)) {
+        throw new Error(`'${fileName}' is not a valid file name (letters, digits and _ $ # @ only)`);
+      }
+      const fs = {
+        name: fileName,
+        type: col(line, 17, 17),
+        designation: col(line, 18, 18),
+        format: col(line, 22, 22),
+        device: col(line, 36, 42),
+        addition: col(line, 20, 20) || null, // 'A' = records may be added
+        keyed: col(line, 34, 34).toUpperCase() === 'K', // the PF's DDS key is what actually orders access
+      };
+      files.push(fs);
+      if (fs.device.toUpperCase() === 'WORKSTN' && !file.name) file = fs;
       continue;
     }
 
@@ -109,13 +110,17 @@ function parseRpgle(source) {
       statements.push({
         op: opcode, indic: indic || null, factor1: factor1 || null,
         expr: expr || null, factor2: factor2 || null, result: result || null,
+        // Resulting indicators, columns 71-76 (two digits each). What they mean
+        // depends on the opcode: CHAIN uses hi as not-found, READ uses eq as
+        // end-of-file. See interpreter.js's file ops.
+        indHi: col(line, 71, 72) || null, indLo: col(line, 73, 74) || null, indEq: col(line, 75, 76) || null,
       });
       continue;
     }
     // H-spec and other spec types: not needed for v1, ignored.
   }
 
-  return { file, dspecs, statements };
+  return { file, files, dspecs, statements };
 }
 
 module.exports = { parseRpgle };

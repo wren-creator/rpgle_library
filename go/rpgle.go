@@ -20,13 +20,15 @@ import (
 // against the ILE RPG Language Reference, SC09-2508) -- see
 // docs/LANGUAGE.md for the narrative version.
 
-// FileSpec is the single WORKSTN file an RPGLE program can declare.
+// FileSpec is one F-spec: a WORKSTN display file or a DISK file.
 type FileSpec struct {
 	Name        string
 	Type        string
 	Designation string
 	Format      string
 	Device      string
+	Addition    string // column 20: "A" allows adding records
+	Keyed       bool   // "K" in column 34
 }
 
 // DSpec is one standalone (definition type 'S') D-spec field.
@@ -50,14 +52,23 @@ type Statement struct {
 	Expr    string // extended factor 2 (EVAL/IF/DOW/WHEN): free-form, cols 36-80
 	Factor2 string // classic factor 2 (DIV/MVR-style ops): cols 36-49
 	Result  string // classic result (DIV/MVR-style ops): cols 50-63
+
+	// Resulting indicators, columns 71-76: high, low, equal.
+	IndHi, IndLo, IndEq string
 }
 
 // Program is a fully-tokenized RPGLE source file.
 type Program struct {
-	File       FileSpec
+	File       FileSpec   // the first WORKSTN file
+	Files      []FileSpec // every F-spec, in source order
 	DSpecs     []DSpec
 	Statements []Statement
 }
+
+var objectNameRe = regexp.MustCompile(`^[A-Za-z_$#@][A-Za-z0-9_$#@]*$`)
+
+// isObjectName: a file name can never contain a path separator or dot.
+func isObjectName(s string) bool { return len(s) <= 100 && objectNameRe.MatchString(s) }
 
 var inzRe = regexp.MustCompile(`(?i)INZ\(([^)]*)\)`)
 
@@ -104,11 +115,22 @@ func ParseRPGLE(source string) (*Program, error) {
 
 		switch specType {
 		case 'F':
-			prog.File.Name = col(r, 7, 16)
-			prog.File.Type = col(r, 17, 17)
-			prog.File.Designation = col(r, 18, 18)
-			prog.File.Format = col(r, 22, 22)
-			prog.File.Device = col(r, 36, 42)
+			fs := FileSpec{
+				Name:        col(r, 7, 16),
+				Type:        col(r, 17, 17),
+				Designation: col(r, 18, 18),
+				Addition:    col(r, 20, 20),
+				Format:      col(r, 22, 22),
+				Keyed:       col(r, 34, 34) == "K",
+				Device:      col(r, 36, 42),
+			}
+			if fs.Name != "" && !isObjectName(fs.Name) {
+				return nil, fmt.Errorf("'%s' is not a valid file name (letters, digits, _ $ # @ only)", fs.Name)
+			}
+			prog.Files = append(prog.Files, fs)
+			if strings.EqualFold(fs.Device, "WORKSTN") && prog.File.Name == "" {
+				prog.File = fs
+			}
 
 		case 'D':
 			name := col(r, 7, 21)
@@ -169,6 +191,7 @@ func ParseRPGLE(source string) (*Program, error) {
 			prog.Statements = append(prog.Statements, Statement{
 				Op: opcode, Indic: indic, Factor1: factor1,
 				Expr: expr, Factor2: factor2, Result: result,
+				IndHi: col(r, 71, 72), IndLo: col(r, 73, 74), IndEq: col(r, 75, 76),
 			})
 
 			// H-spec and other spec types: not needed for v1, ignored.
