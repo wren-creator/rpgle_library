@@ -31,6 +31,14 @@ function col(line, a, b) {
   return (line.slice(a - 1, b) || '').trim();
 }
 
+// A numeric column of a spec line: blank is 0, anything else must be whole
+// digits. parseInt('5A') would quietly give 5, so check first.
+function digits(text, what, owner) {
+  if (!text) return 0;
+  if (!/^\d+$/.test(text)) throw new Error(`${owner}: ${what} '${text}' is not a number`);
+  return parseInt(text, 10);
+}
+
 function parseRpgle(source) {
   const file = { name: null, device: null, format: null };
   const dspecs = [];
@@ -41,6 +49,12 @@ function parseRpgle(source) {
     if (line.length < 6) continue;
     const specType = line[5]; // column 6
     if (specType === '*') continue; // comment line
+
+    // Output specifications describe printed output. This port can't print,
+    // and ignoring them would run the program and quietly print nothing.
+    if (specType === 'O') {
+      throw new Error('output specifications (O-specs) are not supported');
+    }
 
     if (specType === 'F') {
       file.name = col(line, 7, 16);
@@ -58,18 +72,23 @@ function parseRpgle(source) {
       const length = col(line, 33, 39);
       const dec = col(line, 41, 42);
       const keywords = line.length >= 44 ? line.slice(43).trim() : '';
+      // An array would silently become one value, so refuse it. (Text
+      // literals are skipped: INZ('see DIM(3)') is not an array.)
+      if (/\bDIM\s*\(/i.test(keywords.replace(/'[^']*'/g, "''"))) {
+        throw new Error(`${name}: arrays (DIM) are not supported`);
+      }
       let init = null;
       const m = /INZ\(([^)]*)\)/i.exec(keywords);
       if (m) init = m[1].trim();
       dspecs.push({
         name,
         deftype,
-        length: length ? parseInt(length, 10) : 0,
+        length: digits(length, 'length', name),
         // Blank decimal positions (real RPG default rule) means a
         // character field; a real "0" entry means numeric with zero
         // decimals -- so this must stay null, not collapse to 0, or
         // the interpreter can't tell the two cases apart.
-        dec: dec === '' ? null : parseInt(dec, 10),
+        dec: dec === '' ? null : digits(dec, 'decimal positions', name),
         init,
       });
       continue;

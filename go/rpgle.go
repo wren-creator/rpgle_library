@@ -1,6 +1,7 @@
 package rpgle
 
 import (
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -60,6 +61,25 @@ type Program struct {
 
 var inzRe = regexp.MustCompile(`(?i)INZ\(([^)]*)\)`)
 
+var (
+	dimRe     = regexp.MustCompile(`(?i)\bDIM\s*\(`)
+	literalRe = regexp.MustCompile(`'[^']*'`)
+)
+
+// digits reads a numeric column of a spec line: blank is 0, anything else
+// must be whole digits. Quietly treating junk as 0 would hide a mistake.
+func digits(text, what, owner string) (int, error) {
+	if text == "" {
+		return 0, nil
+	}
+	for _, c := range text {
+		if c < '0' || c > '9' {
+			return 0, fmt.Errorf("%s: %s '%s' is not a number", owner, what, text)
+		}
+	}
+	return strconv.Atoi(text)
+}
+
 // ParseRPGLE tokenizes fixed-form RPG IV source into F-spec/D-spec/
 // C-spec records, in source order.
 func ParseRPGLE(source string) (*Program, error) {
@@ -74,6 +94,12 @@ func ParseRPGLE(source string) (*Program, error) {
 		specType := r[5] // column 6
 		if specType == '*' {
 			continue // comment line
+		}
+
+		// Output specifications describe printed output. This port can't print,
+		// and ignoring them would run the program and quietly print nothing.
+		if specType == 'O' {
+			return nil, fmt.Errorf("output specifications (O-specs) are not supported")
 		}
 
 		switch specType {
@@ -96,22 +122,27 @@ func ParseRPGLE(source string) (*Program, error) {
 			if len(r) >= 44 {
 				keywords = strings.TrimSpace(string(r[43:]))
 			}
+			// An array would silently become one value, so refuse it. (Text
+			// literals are skipped: INZ('see DIM(3)') is not an array.)
+			if dimRe.MatchString(literalRe.ReplaceAllString(keywords, "''")) {
+				return nil, fmt.Errorf("%s: arrays (DIM) are not supported", name)
+			}
 			var init *string
 			if m := inzRe.FindStringSubmatch(keywords); m != nil {
 				v := strings.TrimSpace(m[1])
 				init = &v
 			}
-			length := 0
-			if lengthS != "" {
-				if n, err := strconv.Atoi(lengthS); err == nil {
-					length = n
-				}
+			length, err := digits(lengthS, "length", name)
+			if err != nil {
+				return nil, err
 			}
 			var dec *int
 			if decS != "" {
-				if d, err := strconv.Atoi(decS); err == nil {
-					dec = &d
+				d, err := digits(decS, "decimal positions", name)
+				if err != nil {
+					return nil, err
 				}
+				dec = &d
 			}
 			prog.DSpecs = append(prog.DSpecs, DSpec{
 				Name: name, DefType: deftype, Length: length, Dec: dec, Init: init,

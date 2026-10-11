@@ -239,3 +239,15 @@ class OverlongNameTest(unittest.TestCase):
 
     def test_ordinary_long_names_still_work(self):
         self.assertEqual(parse_rpgle("**free\ndcl-f " + "a" * 90 + " workstn;\n").files[0].name, "a" * 90)
+
+
+class DimInsideALiteralTest(unittest.TestCase):
+    def test_a_text_literal_that_mentions_dim_is_not_an_array(self):
+        line = dspec("NOTE", 20, None, "'see DIM(3) below'")
+        self.assertEqual(parse_rpgle(line).dspecs[0].name, "NOTE")
+
+    def test_a_real_dim_is_still_refused_in_any_case(self):
+        for kw in ("DIM(10)", "dim(10)", "Dim (10)"):
+            with self.subTest(kw=kw):
+                with self.assertRaises(RpgleError):
+                    parse_rpgle(dspec("ARR", 5, 0) + " " + kw)

@@ -260,7 +260,7 @@ def _parse(source: str) -> Program:
             length_s = col(line, 33, 39)
             dec_s = col(line, 41, 42)
             keywords = line[43:].strip() if len(line) >= 44 else ""
-            if re.search(r"\bDIM\s*\(", keywords, re.IGNORECASE):
+            if re.search(r"\bDIM\s*\(", re.sub(r"'[^']*'", "''", keywords), re.IGNORECASE):  # not inside a text literal
                 raise RpgleError(f"{name}: arrays in fixed-form D-specs are not supported (use free-form dcl-s ... dim())")
             init = None
             m = _INZ_RE.search(keywords)
