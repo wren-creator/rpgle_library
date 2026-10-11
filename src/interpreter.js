@@ -197,6 +197,20 @@ function readValue(vars, name) {
   return vars[key].value;
 }
 
+// A strict number reader: a string must look like a number (so "12x", "" and
+// "1.2.3" are not numbers) rather than being coerced to NaN, 0 or a prefix.
+// Returns NaN for anything that isn't one.
+const NUMBER_TEXT = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
+function toNumber(value) {
+  if (typeof value === 'number') return value;
+  if (typeof value === 'boolean') return value ? 1 : 0;
+  if (typeof value === 'string') {
+    const t = value.trim();
+    return NUMBER_TEXT.test(t) ? Number(t) : NaN;
+  }
+  return NaN;
+}
+
 function assign(vars, indicators, lvalue, rvalue) {
   const indM = /^\*IN(\d\d)$/i.exec(lvalue);
   if (indM) { indicators[indM[1]] = Boolean(rvalue); return; }
@@ -209,8 +223,13 @@ function assign(vars, indicators, lvalue, rvalue) {
   } else {
     // Truncate-on-assign (no rounding) -- the real RPG default, and
     // what DIV/MVR-based modulo relies on for boundedness.
+    const n = toNumber(rvalue);
+    if (!Number.isFinite(n)) {
+      const what = typeof rvalue === 'string' ? `'${rvalue}'` : 'that value';
+      throw new Error(`${what} is not a number, so it can't be put in the numeric field ${lvalue.trim()}`);
+    }
     const factor = Math.pow(10, v.dec || 0);
-    v.value = Math.trunc(Number(rvalue) * factor) / factor;
+    v.value = Math.trunc(n * factor) / factor;
   }
 }
 
@@ -340,6 +359,7 @@ function* runProgram(rpgAst, ddsFormats) {
       case 'DIV': {
         const f1 = /^-?\d+(\.\d+)?$/.test(instr.factor1) ? parseFloat(instr.factor1) : readValue(vars, instr.factor1);
         const f2 = /^-?\d+(\.\d+)?$/.test(instr.factor2) ? parseFloat(instr.factor2) : readValue(vars, instr.factor2);
+        if (Number(f2) === 0) throw new Error('DIV: division by zero');
         const quotient = Math.trunc(f1 / f2);
         lastDiv = { quotient, remainder: f1 - quotient * f2 };
         assign(vars, indicators, instr.result, quotient);
@@ -359,10 +379,14 @@ function* runProgram(rpgAst, ddsFormats) {
         if (!currentFormat) throw new Error(`Unknown DDS record format: ${instr.format}`);
         const rendered = renderFormat(currentFormat, vars, indicators);
         currentInputMap = rendered.inputMap;
-        const resume = yield {
+        // numericFields lets a front end refuse letters in a number field as
+        // they're typed, as a real terminal would.
+        const numericFields = Object.values(rendered.inputMap).filter((n) => vars[n] && vars[n].type === 'N');
+        // Resuming with nothing at all (gen.next()) means "no key, no input".
+        const resume = (yield {
           formatName: currentFormat.name, fields: rendered.fields, cursor: rendered.cursor,
-          keys: currentFormat.keys, inputMap: rendered.inputMap,
-        };
+          keys: currentFormat.keys, inputMap: rendered.inputMap, numericFields,
+        }) || {};
 
         // Response indicators reset before applying this read's key,
         // scoped to only the indicators this format's own CF/CA
@@ -374,7 +398,10 @@ function* runProgram(rpgAst, ddsFormats) {
 
         for (const [row, fieldName] of Object.entries(currentInputMap)) {
           if (resume.values && fieldName in resume.values) {
-            assign(vars, indicators, fieldName, resume.values[fieldName]);
+            let typed = resume.values[fieldName];
+            // A blank numeric field reads as zero.
+            if (vars[fieldName].type === 'N' && String(typed).trim() === '') typed = '0';
+            assign(vars, indicators, fieldName, typed);
           }
         }
         pc++;

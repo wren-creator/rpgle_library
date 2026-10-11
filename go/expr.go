@@ -416,6 +416,9 @@ func (p *exprParser) parseTerm() (Value, error) {
 		if err != nil {
 			return Value{}, err
 		}
+		if op == "/" && rhs.AsFloat() == 0 {
+			return Value{}, fmt.Errorf("division by zero")
+		}
 		if op == "*" {
 			v = NumberValue(v.AsFloat() * rhs.AsFloat())
 		} else {

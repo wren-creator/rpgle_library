@@ -275,3 +275,107 @@ func TestExfmtOfAFormatThatDoesNotExistIsStillAnError(t *testing.T) {
 		t.Errorf("want an unknown-format error, got %v", err)
 	}
 }
+
+// ── numbers: what happens when the data isn't one ──────────────────────
+// Letters typed into a number field used to quietly become 0. It is an error
+// that names the field, a blank field reads as zero, and a front end can ask
+// which inputs are numeric. (Parity with the Python port.)
+
+const numDDS = "     A          R INQ                       CF03(03)\n" +
+	"     A            CUSTNO         5  0B  3 20\n" +
+	"     A            NAME          10A  B  4 20\n"
+const numProg = "     FINQ       CF   E             WORKSTN\n" +
+	"     C                   EXFMT     INQ\n     C                   EXFMT     INQ\n"
+
+func typeInto(t *testing.T, values map[string]string) (*rpgle.ScreenData, error) {
+	t.Helper()
+	dds, err := rpgle.ParseDDS(numDDS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prog, err := rpgle.ParseRPGLE(numProg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := rpgle.Run(prog, dds)
+	if _, _, err := r.Next(nil); err != nil {
+		t.Fatal(err)
+	}
+	s, _, err := r.Next(&rpgle.Resume{Key: "ENTER", Values: values})
+	return s, err
+}
+
+func TestScreenDataSaysWhichInputsAreNumeric(t *testing.T) {
+	dds, _ := rpgle.ParseDDS(numDDS)
+	prog, _ := rpgle.ParseRPGLE(numProg)
+	screen, _, err := rpgle.Run(prog, dds).Next(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(screen.NumericFields) != 1 || screen.NumericFields[0] != "custno" {
+		t.Errorf("NumericFields = %v, want [custno]", screen.NumericFields)
+	}
+}
+
+func TestLettersInANumericFieldAreAnErrorThatNamesTheField(t *testing.T) {
+	for _, typed := range []string{"abc", "12x", "1.2.3"} {
+		_, err := typeInto(t, map[string]string{"custno": typed})
+		if err == nil || !strings.Contains(err.Error(), "'"+typed+"' is not a number") || !strings.Contains(err.Error(), "custno") {
+			t.Errorf("typed %q: want a not-a-number error naming custno, got %v", typed, err)
+		}
+	}
+}
+
+func TestABlankNumericFieldReadsAsZeroAndPaddedNumbersStillWork(t *testing.T) {
+	for typed, want := range map[string]string{"   ": "00000", "": "00000", " 42 ": "00042", "-7": "-0007"} {
+		s, err := typeInto(t, map[string]string{"custno": typed})
+		if err != nil {
+			t.Fatalf("typed %q: %v", typed, err)
+		}
+		var got string
+		for _, f := range s.Fields {
+			if f.Input && f.Row == 2 {
+				got = f.Text
+			}
+		}
+		if got != want {
+			t.Errorf("typed %q: field shows %q, want %q", typed, got, want)
+		}
+	}
+}
+
+func TestAssigningTextToANumberIsAnErrorANumericStringIsFine(t *testing.T) {
+	run := func(expr string) error {
+		prog, err := rpgle.ParseRPGLE("     Dx                S              5  0\n     C                   EVAL      " + expr + "\n")
+		if err != nil {
+			t.Fatal(err)
+		}
+		dds, _ := rpgle.ParseDDS("")
+		_, _, err = rpgle.Run(prog, dds).Next(nil)
+		return err
+	}
+	if err := run("x = 'abc'"); err == nil || !strings.Contains(err.Error(), "'abc' is not a number") {
+		t.Errorf("x = 'abc': got %v", err)
+	}
+	if err := run("x = ''"); err == nil || !strings.Contains(err.Error(), "not a number") {
+		t.Errorf("x = '': got %v", err)
+	}
+	if err := run("x = '5'"); err != nil {
+		t.Errorf("x = '5': %v", err)
+	}
+}
+
+func TestTheDivOpcodeRefusesToDivideByZero(t *testing.T) {
+	src := "     Da                S              5  0 INZ(7)\n" +
+		"     Db                S              5  0 INZ(0)\n" +
+		"     Dq                S              5  0\n" +
+		"     C     a             DIV       b             q\n"
+	prog, err := rpgle.ParseRPGLE(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dds, _ := rpgle.ParseDDS("")
+	if _, _, err := rpgle.Run(prog, dds).Next(nil); err == nil || !strings.Contains(strings.ToLower(err.Error()), "division by zero") {
+		t.Errorf("want a division-by-zero error, got %v", err)
+	}
+}

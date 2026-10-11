@@ -171,6 +171,7 @@ class Parser {
     while (this.peek() && this.peek().type === 'op' && (this.peek().value === '*' || this.peek().value === '/')) {
       const op = this.next().value;
       const rhs = this.parseUnary();
+      if (op === '/' && Number(rhs) === 0) throw new Error('Division by zero');
       v = op === '*' ? v * rhs : v / rhs;
     }
     return v;

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -306,6 +307,31 @@ var (
 	assignInlrRe = regexp.MustCompile(`(?i)^\*INLR$`)
 )
 
+// numberText is what a number looks like as text. Anything else ("12x", "",
+// "1.2.3") is not a number, rather than being quietly read as 0.
+var numberText = regexp.MustCompile(`^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$`)
+
+// toNumber reads a value as a number, reporting whether it was one.
+func toNumber(v Value) (float64, bool) {
+	switch v.Kind {
+	case 'N':
+		return v.Num, !math.IsNaN(v.Num) && !math.IsInf(v.Num, 0)
+	case 'B':
+		if v.Bool {
+			return 1, true
+		}
+		return 0, true
+	case 'S':
+		t := strings.TrimSpace(v.Str)
+		if !numberText.MatchString(t) {
+			return 0, false
+		}
+		f, err := strconv.ParseFloat(t, 64)
+		return f, err == nil && !math.IsInf(f, 0)
+	}
+	return 0, false
+}
+
 func assign(vars map[string]*Var, indicators map[string]bool, lvalue string, rvalue Value) error {
 	if m := assignIndRe.FindStringSubmatch(lvalue); m != nil {
 		indicators[m[1]] = rvalue.AsBool()
@@ -325,8 +351,16 @@ func assign(vars map[string]*Var, indicators map[string]bool, lvalue string, rva
 	} else {
 		// Truncate-on-assign (no rounding) -- the real RPG default, and
 		// what DIV/MVR-based modulo relies on for boundedness.
+		n, ok := toNumber(rvalue)
+		if !ok {
+			what := "that value"
+			if rvalue.Kind == 'S' {
+				what = "'" + rvalue.Str + "'"
+			}
+			return fmt.Errorf("%s is not a number, so it can't be put in the numeric field %s", what, strings.TrimSpace(lvalue))
+		}
 		factor := math.Pow(10, float64(v.Dec))
-		v.Value = NumberValue(math.Trunc(rvalue.AsFloat()*factor) / factor)
+		v.Value = NumberValue(math.Trunc(n*factor) / factor)
 	}
 	return nil
 }
@@ -458,6 +492,9 @@ type ScreenData struct {
 	Cursor     Cursor
 	Keys       map[string]string
 	InputMap   map[int]string
+	// NumericFields names the input fields that hold numbers, so a front end
+	// can refuse letters as they are typed, as a real terminal would.
+	NumericFields []string
 }
 
 // Resume is what the caller sends back to unblock the interpreter
@@ -613,6 +650,10 @@ func (r *Runner) execute(prog *Program, dds *DDS) {
 				r.doneCh <- err
 				return
 			}
+			if f2 == 0 {
+				r.doneCh <- fmt.Errorf("DIV: division by zero")
+				return
+			}
 			quotient := math.Trunc(f1 / f2)
 			lastDivRemainder = f1 - quotient*f2
 			if err := assign(vars, indicators, in.Result, NumberValue(quotient)); err != nil {
@@ -636,6 +677,17 @@ func (r *Runner) execute(prog *Program, dds *DDS) {
 				return
 			}
 			rr := RenderFormat(format, vars, indicators)
+			rows := make([]int, 0, len(rr.InputMap))
+			for row := range rr.InputMap {
+				rows = append(rows, row)
+			}
+			sort.Ints(rows)
+			var numericFields []string
+			for _, row := range rows {
+				if v, ok := vars[rr.InputMap[row]]; ok && v.Type == 'N' {
+					numericFields = append(numericFields, rr.InputMap[row])
+				}
+			}
 
 			r.screenCh <- ScreenData{
 				FormatName: format.Name,
@@ -643,6 +695,8 @@ func (r *Runner) execute(prog *Program, dds *DDS) {
 				Cursor:     rr.Cursor,
 				Keys:       format.Keys,
 				InputMap:   rr.InputMap,
+
+				NumericFields: numericFields,
 			}
 			resume := <-r.resumeCh
 
@@ -660,6 +714,9 @@ func (r *Runner) execute(prog *Program, dds *DDS) {
 			for _, fieldName := range rr.InputMap {
 				if resume.Values != nil {
 					if v, ok := resume.Values[fieldName]; ok {
+						if vars[fieldName].Type == 'N' && strings.TrimSpace(v) == "" {
+							v = "0" // a blank numeric field reads as zero
+						}
 						if err := assign(vars, indicators, fieldName, StringValue(v)); err != nil {
 							r.doneCh <- err
 							return

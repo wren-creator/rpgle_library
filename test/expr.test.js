@@ -116,3 +116,12 @@ test('negating text is an error, negating a number still works', () => {
   assert.equal(evalExpr('-(2 + 3)', ctx), -5);
   assert.equal(evalExpr('- -4', ctx), 4);
 });
+
+// Dividing by zero is an error, not Infinity. (Parity with the Python port.)
+test('division by zero is an error, ordinary division still works', () => {
+  const ctx = { vars: {}, indicators: {} };
+  assert.throws(() => evalExpr('1 / 0', ctx), /by zero/i);
+  assert.throws(() => evalExpr('5 / (2 - 2)', ctx), /by zero/i);
+  assert.equal(evalExpr('7 / 2', ctx), 3.5);
+  assert.equal(evalExpr('0 / 5', ctx), 0);
+});

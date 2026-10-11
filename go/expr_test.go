@@ -231,3 +231,18 @@ func TestNegatingTextIsAnErrorNegatingANumberStillWorks(t *testing.T) {
 		t.Errorf("- -4 = %+v", got)
 	}
 }
+
+// Dividing by zero is an error, not +Inf. (Parity with the Python port.)
+func TestDivisionByZeroIsAnErrorOrdinaryDivisionStillWorks(t *testing.T) {
+	for _, src := range []string{"1 / 0", "5 / (2 - 2)"} {
+		if _, err := rpgle.EvalExpr(src, emptyCtx()); err == nil || !strings.Contains(err.Error(), "by zero") {
+			t.Errorf("EvalExpr(%q): want a division-by-zero error, got %v", src, err)
+		}
+	}
+	if got := mustEval(t, "7 / 2", emptyCtx()); got.Num != 3.5 {
+		t.Errorf("7 / 2 = %v", got.Num)
+	}
+	if got := mustEval(t, "0 / 5", emptyCtx()); got.Num != 0 {
+		t.Errorf("0 / 5 = %v", got.Num)
+	}
+}

@@ -162,3 +162,67 @@ test('EXFMT of a format that does not exist is still an error', () => {
   const rpg = parseRpgle('     FRESULT    CF   E             WORKSTN\n     C                   EXFMT     nosuch\n');
   assert.throws(() => runProgram(rpg, dds).next(), /Unknown DDS record format: nosuch/);
 });
+
+// ── numbers: what happens when the data isn't one ──────────────────────
+// Letters typed into a number field used to show "00NaN" (JS) or quietly
+// become 0 (Go). It is an error that names the field, a blank field reads as
+// zero, and a front end can ask which inputs are numeric. (Parity with Python.)
+
+const NUM_DDS = "     A          R INQ                       CF03(03)\n" +
+  "     A            CUSTNO         5  0B  3 20\n" +
+  "     A            NAME          10A  B  4 20\n";
+const NUM_PROG = '     FINQ       CF   E             WORKSTN\n' +
+  '     C                   EXFMT     INQ\n     C                   EXFMT     INQ\n';
+
+function typeInto(fieldValues) {
+  const gen = runProgram(parseRpgle(NUM_PROG), parseDds(NUM_DDS));
+  gen.next();
+  return gen.next({ key: 'ENTER', values: fieldValues }).value;
+}
+
+test('screen data says which inputs are numeric', () => {
+  const screen = runProgram(parseRpgle(NUM_PROG), parseDds(NUM_DDS)).next().value;
+  assert.deepEqual([...screen.numericFields], ['custno']);
+});
+
+test('letters in a numeric field are an error that names the field', () => {
+  for (const typed of ['abc', '12x', '1.2.3']) {
+    assert.throws(() => typeInto({ custno: typed }), new RegExp(`'${typed}' is not a number.*custno`), typed);
+  }
+});
+
+test('a blank numeric field reads as zero, and padded numbers still work', () => {
+  const text = (v) => typeInto({ custno: v }).fields.find((f) => f.input && f.row === 2).text;
+  assert.equal(text('   '), '00000');
+  assert.equal(text(''), '00000');
+  assert.equal(text(' 42 '), '00042');
+  assert.equal(text('-7'), '-0007');
+});
+
+test('text typed into a character field is untouched', () => {
+  const screen = typeInto({ name: 'abc' });
+  assert.ok(screen.fields.some((f) => f.text.startsWith('abc')));
+});
+
+test('assigning text to a number is an error, a numeric string is fine', () => {
+  const run = (expr) => runProgram(parseRpgle(
+    '     Dx                S              5  0\n' +
+    '     C                   EVAL      ' + expr + '\n'), parseDds('')).next();
+  assert.throws(() => run("x = 'abc'"), /'abc' is not a number.*field x/);
+  assert.throws(() => run("x = ''"), /not a number/);
+  assert.doesNotThrow(() => run("x = '5'"));
+});
+
+test('the DIV opcode refuses to divide by zero', () => {
+  const src = '     Da                S              5  0 INZ(7)\n' +
+    '     Db                S              5  0 INZ(0)\n' +
+    '     Dq                S              5  0\n' +
+    '     C     a             DIV       b             q\n';
+  assert.throws(() => runProgram(parseRpgle(src), parseDds('')).next(), /division by zero/i);
+});
+
+test('resuming with nothing at all does not crash', () => {
+  const gen = runProgram(parseRpgle(NUM_PROG), parseDds(NUM_DDS));
+  gen.next();
+  assert.doesNotThrow(() => gen.next());
+});
