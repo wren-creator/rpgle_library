@@ -89,6 +89,7 @@ function compile(statements) {
         break;
       }
       case 'ELSE': {
+        if (ifStack.length === 0) throw new Error('ELSE with no open IF');
         const frame = ifStack[ifStack.length - 1];
         const jmpIdx = instrs.length;
         instrs.push({ op: 'JMP', target: null });
@@ -97,6 +98,7 @@ function compile(statements) {
         break;
       }
       case 'ENDIF': {
+        if (ifStack.length === 0) throw new Error('ENDIF with no open IF');
         const frame = ifStack.pop();
         const idx = instrs.length;
         if (frame.elseJmpIndex === null) instrs[frame.ifIndex].falseTarget = idx;
@@ -112,12 +114,14 @@ function compile(statements) {
         break;
       }
       case 'LEAVE': {
+        if (dowStack.length === 0) throw new Error('LEAVE with no open DOW');
         const frame = dowStack[dowStack.length - 1];
         frame.leaves.push(instrs.length);
         instrs.push({ op: 'LEAVE', target: null });
         break;
       }
       case 'ENDDO': {
+        if (dowStack.length === 0) throw new Error('ENDDO with no open DOW');
         const frame = dowStack.pop();
         const idx = instrs.length;
         instrs[frame.dowIndex].falseTarget = idx + 1;
@@ -132,6 +136,7 @@ function compile(statements) {
         break;
       case 'WHEN':
       case 'OTHER': {
+        if (selStack.length === 0) throw new Error(`${stmt.op} with no open SELECT`);
         const sframe = selStack[selStack.length - 1];
         if (sframe.arms.length > 0) {
           sframe.pendingJumps.push(instrs.length);
@@ -144,6 +149,7 @@ function compile(statements) {
         break;
       }
       case 'ENDSL': {
+        if (selStack.length === 0) throw new Error('ENDSL with no open SELECT');
         const sframe = selStack.pop();
         sframe.pendingJumps.push(instrs.length);
         instrs.push({ op: 'JMP', target: null });
@@ -188,6 +194,11 @@ function compile(statements) {
     }
   }
 
+  // A block left open has jump targets that were never filled in; running it
+  // would crash on a missing address, so say so now.
+  if (ifStack.length > 0) throw new Error('IF with no ENDIF');
+  if (dowStack.length > 0) throw new Error('DOW loop with no ENDDO');
+  if (selStack.length > 0) throw new Error('SELECT with no ENDSL');
   return { instrs, subroutines };
 }
 

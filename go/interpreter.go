@@ -273,6 +273,17 @@ func Compile(statements []Statement) (*Compiled, error) {
 		}
 	}
 
+	// A block left open has jump targets that were never filled in; running it
+	// would crash on a missing address, so say so now.
+	if len(ifStack) > 0 {
+		return nil, errors.New("IF with no ENDIF")
+	}
+	if len(dowStack) > 0 {
+		return nil, errors.New("DOW loop with no ENDDO")
+	}
+	if len(selStack) > 0 {
+		return nil, errors.New("SELECT with no ENDSL")
+	}
 	return &Compiled{Instrs: instrs, Subroutines: subroutines}, nil
 }
 

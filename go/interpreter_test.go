@@ -1,6 +1,7 @@
 package rpgle_test
 
 import (
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -377,5 +378,69 @@ func TestTheDivOpcodeRefusesToDivideByZero(t *testing.T) {
 	dds, _ := rpgle.ParseDDS("")
 	if _, _, err := rpgle.Run(prog, dds).Next(nil); err == nil || !strings.Contains(strings.ToLower(err.Error()), "division by zero") {
 		t.Errorf("want a division-by-zero error, got %v", err)
+	}
+}
+
+// ── block structure: a keyword with nothing to close, or a block left open ──
+// A DOW or IF with no end compiled and crashed later on a missing jump
+// address; it is an error up front. (Parity with the Python port.)
+
+func cspecLine(op, factor2 string) string {
+	return fmt.Sprintf("     C                   %-10s%s", op, factor2)
+}
+
+func compileLines(t *testing.T, lines ...string) error {
+	t.Helper()
+	prog, err := rpgle.ParseRPGLE(strings.Join(lines, "\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = rpgle.Compile(prog.Statements)
+	return err
+}
+
+func TestABlockKeywordWithNothingOpenIsAnErrorNamingTheProblem(t *testing.T) {
+	cases := []struct{ op, f2, want string }{
+		{"ELSE", "", "ELSE with no open IF"},
+		{"ENDIF", "", "ENDIF with no open IF"},
+		{"ENDDO", "", "ENDDO with no open DOW"},
+		{"LEAVE", "", "LEAVE with no open DOW"},
+		{"WHEN", "1 = 1", "WHEN with no open SELECT"},
+		{"OTHER", "", "OTHER with no open SELECT"},
+		{"ENDSL", "", "ENDSL with no open SELECT"},
+	}
+	for _, c := range cases {
+		if err := compileLines(t, cspecLine(c.op, c.f2)); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: want %q, got %v", c.op, c.want, err)
+		}
+	}
+}
+
+func TestABlockLeftOpenIsAnErrorAtCompileTimeNotACrashAtRunTime(t *testing.T) {
+	cases := []struct {
+		lines []string
+		want  string
+	}{
+		{[]string{cspecLine("DOW", "1 = 1")}, "DOW loop with no ENDDO"},
+		{[]string{cspecLine("IF", "1 = 1")}, "IF with no ENDIF"},
+		{[]string{cspecLine("IF", "1 = 1"), cspecLine("ELSE", "")}, "IF with no ENDIF"},
+		{[]string{cspecLine("SELECT", ""), cspecLine("WHEN", "1 = 1")}, "SELECT with no ENDSL"},
+		{[]string{cspecLine("IF", "1 = 1"), cspecLine("DOW", "1 = 1"), cspecLine("ENDDO", "")}, "IF with no ENDIF"}, // the inner one closed
+	}
+	for _, c := range cases {
+		if err := compileLines(t, c.lines...); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%v: want %q, got %v", c.lines, c.want, err)
+		}
+	}
+}
+
+func TestBalancedBlocksCompileAsBefore(t *testing.T) {
+	err := compileLines(t,
+		cspecLine("IF", "1 = 1"), cspecLine("ELSE", ""), cspecLine("ENDIF", ""),
+		cspecLine("DOW", "1 = 2"), cspecLine("LEAVE", ""), cspecLine("ENDDO", ""),
+		cspecLine("SELECT", ""), cspecLine("WHEN", "1 = 1"), cspecLine("OTHER", ""), cspecLine("ENDSL", ""),
+	)
+	if err != nil {
+		t.Errorf("balanced blocks: %v", err)
 	}
 }

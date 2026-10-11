@@ -226,3 +226,37 @@ test('resuming with nothing at all does not crash', () => {
   gen.next();
   assert.doesNotThrow(() => gen.next());
 });
+
+// ── block structure: a keyword with nothing to close, or a block left open ──
+// Stray ELSE/ENDIF/ENDDO/LEAVE/WHEN/OTHER/ENDSL crashed JS with a TypeError,
+// and a DOW or IF with no end compiled and crashed later on a missing jump
+// address. Both are errors up front. (Parity with the Python port.)
+
+const cs = (op, factor2 = '') => '     C                   ' + op.padEnd(10) + factor2;
+const compiled = (...lines) => () => compile(parseRpgle(lines.join('\n')).statements);
+
+test('a block keyword with nothing open is an error naming the problem', () => {
+  assert.throws(compiled(cs('ELSE')), /ELSE with no open IF/);
+  assert.throws(compiled(cs('ENDIF')), /ENDIF with no open IF/);
+  assert.throws(compiled(cs('ENDDO')), /ENDDO with no open DOW/);
+  assert.throws(compiled(cs('LEAVE')), /LEAVE with no open DOW/);
+  assert.throws(compiled(cs('WHEN', '1 = 1')), /WHEN with no open SELECT/);
+  assert.throws(compiled(cs('OTHER')), /OTHER with no open SELECT/);
+  assert.throws(compiled(cs('ENDSL')), /ENDSL with no open SELECT/);
+});
+
+test('a block left open is an error at compile time, not a crash at run time', () => {
+  assert.throws(compiled(cs('DOW', '1 = 1')), /DOW loop with no ENDDO/);
+  assert.throws(compiled(cs('IF', '1 = 1')), /IF with no ENDIF/);
+  assert.throws(compiled(cs('IF', '1 = 1'), cs('ELSE')), /IF with no ENDIF/);
+  assert.throws(compiled(cs('SELECT'), cs('WHEN', '1 = 1')), /SELECT with no ENDSL/);
+  assert.throws(compiled(cs('IF', '1 = 1'), cs('DOW', '1 = 1'), cs('ENDDO')), /IF with no ENDIF/); // the inner one closed
+});
+
+test('balanced blocks compile as before', () => {
+  assert.doesNotThrow(compiled(
+    cs('IF', '1 = 1'), cs('ELSE'), cs('ENDIF'),
+    cs('DOW', '1 = 2'), cs('LEAVE'), cs('ENDDO'),
+    cs('SELECT'), cs('WHEN', '1 = 1'), cs('OTHER'), cs('ENDSL'),
+  ));
+});
