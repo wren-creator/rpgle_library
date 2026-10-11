@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	rpgle "github.com/wren-creator/rpgle_library/go"
+	"github.com/wren-creator/rpgle_library/go/sqlitedb"
 )
 
 type parityCases struct {
@@ -24,6 +25,14 @@ type parityCases struct {
 	Compile [][]string
 	Typed   []string
 	Assign  []string
+	Files   []struct{ Source string }
+	Fixture struct {
+		Order []string
+		PFs   map[string]struct {
+			DDS  string
+			Seed [][]json.RawMessage
+		}
+	} `json:"_files"`
 }
 
 var parityErr = map[string]any{"error": true}
@@ -51,6 +60,7 @@ func TestParityDump(t *testing.T) {
 		"compile": parityCompile(c.Compile),
 		"typed":   parityTyped(c.Typed),
 		"assign":  parityAssign(c.Assign),
+		"files":   parityFiles(&c),
 	}
 	b, err := json.Marshal(res)
 	if err != nil {
@@ -211,4 +221,98 @@ func parityAssign(cases []string) []any {
 		}
 	}
 	return out
+}
+
+// parityFiles runs each case's whole program against freshly seeded tables and
+// reports what is left in every table, in key order.
+func parityFiles(c *parityCases) []any {
+	var out []any
+	for _, fc := range c.Files {
+		out = append(out, parityFileCase(c, fc.Source))
+	}
+	return out
+}
+
+func parityFileCase(c *parityCases, source string) any {
+	db, err := sqlitedb.Open(":memory:")
+	if err != nil {
+		return parityErr
+	}
+	defer db.Close()
+
+	pfs := map[string]*rpgle.PhysicalFile{}
+	handles := map[string]rpgle.FileHandle{}
+	for _, n := range c.Fixture.Order {
+		f := c.Fixture.PFs[n]
+		pf, err := rpgle.ParsePF(n, f.DDS)
+		if err != nil {
+			return parityErr
+		}
+		pfs[n] = pf
+		if handles[n], err = db.OpenFile(pf); err != nil {
+			return parityErr
+		}
+		for _, row := range f.Seed {
+			rec := rpgle.Record{}
+			for i, fld := range pf.Fields {
+				var s string
+				if json.Unmarshal(row[i], &s) == nil {
+					rec[fld.Name] = rpgle.StringValue(s)
+				} else {
+					var x float64
+					json.Unmarshal(row[i], &x)
+					rec[fld.Name] = rpgle.NumberValue(x)
+				}
+			}
+			if err := handles[n].Write(rec); err != nil {
+				return parityErr
+			}
+		}
+	}
+
+	prog, err := rpgle.ParseRPGLE(source)
+	if err != nil {
+		return parityErr
+	}
+	dds, _ := rpgle.ParseDDS("")
+	r := rpgle.RunWith(prog, dds, rpgle.RunOptions{DB: db, PFs: pfs})
+	for {
+		_, done, err := r.Next(nil)
+		if err != nil {
+			return parityErr
+		}
+		if done {
+			break
+		}
+	}
+
+	dump := map[string]any{}
+	for _, n := range c.Fixture.Order {
+		h := handles[n]
+		if err := h.Setll(nil); err != nil {
+			return parityErr
+		}
+		rows := [][]any{}
+		for {
+			rec, err := h.Read()
+			if err != nil {
+				return parityErr
+			}
+			if rec == nil {
+				break
+			}
+			var row []any
+			for _, fld := range pfs[n].Fields {
+				v := rec[fld.Name]
+				if v.Kind == 'S' {
+					row = append(row, v.Str)
+				} else {
+					row = append(row, v.Num)
+				}
+			}
+			rows = append(rows, row)
+		}
+		dump[n] = rows
+	}
+	return parityOK(dump)
 }
