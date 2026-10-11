@@ -1,6 +1,7 @@
 package rpgle_test
 
 import (
+	"strings"
 	"testing"
 
 	rpgle "github.com/wren-creator/rpgle_library/go"
@@ -187,5 +188,46 @@ func TestComparingTextWithANumberIsStillNeverEqual(t *testing.T) {
 	}
 	if !mustEval(t, "1 = 1", ctx).AsBool() {
 		t.Error("1 = 1 should be true")
+	}
+}
+
+// + joins two texts; text mixed with a number, - on text, and negating
+// text are errors rather than a silent NaN. (Parity with the Python port.)
+func TestPlusJoinsTwoCharacterValuesPaddingIncluded(t *testing.T) {
+	ctx := &rpgle.Context{
+		Vars:       map[string]*rpgle.Var{"name": {Type: 'A', Length: 6, Dec: 0, Value: rpgle.StringValue("BOB   ")}},
+		Indicators: map[string]bool{},
+	}
+	if got := mustEval(t, "'ab' + 'cd'", ctx); got.Kind != 'S' || got.Str != "abcd" {
+		t.Errorf("'ab' + 'cd' = %+v, want text abcd", got)
+	}
+	if got := mustEval(t, "name + 'x'", ctx); got.Str != "BOB   x" { // padding is part of the value
+		t.Errorf("name + 'x' = %q, want %q", got.Str, "BOB   x")
+	}
+	if got := mustEval(t, "1 + 2", ctx); got.Kind != 'N' || got.Num != 3 {
+		t.Errorf("1 + 2 = %+v", got)
+	}
+	if got := mustEval(t, "7 - 2", ctx); got.Num != 5 {
+		t.Errorf("7 - 2 = %+v", got)
+	}
+}
+
+func TestTextAndNumbersDoNotMixInPlusAndMinus(t *testing.T) {
+	for _, src := range []string{"'a' + 1", "1 + 'a'", "'a' - 1", "1 - 'a'", "'a' - 'b'"} {
+		if _, err := rpgle.EvalExpr(src, emptyCtx()); err == nil || !strings.Contains(strings.ToLower(err.Error()), "text") {
+			t.Errorf("EvalExpr(%q): want an error mentioning text, got %v", src, err)
+		}
+	}
+}
+
+func TestNegatingTextIsAnErrorNegatingANumberStillWorks(t *testing.T) {
+	if _, err := rpgle.EvalExpr("-'a'", emptyCtx()); err == nil || !strings.Contains(err.Error(), "negate text") {
+		t.Errorf("-'a': want a 'negate text' error, got %v", err)
+	}
+	if got := mustEval(t, "-(2 + 3)", emptyCtx()); got.Num != -5 {
+		t.Errorf("-(2 + 3) = %+v", got)
+	}
+	if got := mustEval(t, "- -4", emptyCtx()); got.Num != 4 {
+		t.Errorf("- -4 = %+v", got)
 	}
 }

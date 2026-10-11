@@ -153,7 +153,15 @@ class Parser {
     while (this.peek() && this.peek().type === 'op' && (this.peek().value === '+' || this.peek().value === '-')) {
       const op = this.next().value;
       const rhs = this.parseTerm();
-      v = op === '+' ? v + rhs : v - rhs;
+      if (typeof v === 'string' || typeof rhs === 'string') {
+        // + joins two character values (padding and all). Anything else
+        // involving text is a mistake that would otherwise be a silent
+        // "a1" or NaN, so it's an error.
+        if (op === '+' && typeof v === 'string' && typeof rhs === 'string') v = v + rhs;
+        else throw new Error(`Can't use ${op} between text and a number, or - between two texts`);
+      } else {
+        v = op === '+' ? v + rhs : v - rhs;
+      }
     }
     return v;
   }
@@ -171,7 +179,9 @@ class Parser {
   parseUnary() {
     if (this.peek() && this.peek().type === 'op' && this.peek().value === '-') {
       this.next();
-      return -this.parseUnary();
+      const operand = this.parseUnary();
+      if (typeof operand === 'string') throw new Error("Can't negate text");
+      return -operand;
     }
     return this.parsePrimary();
   }

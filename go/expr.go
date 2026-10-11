@@ -382,6 +382,16 @@ func (p *exprParser) parseAdditive() (Value, error) {
 		if err != nil {
 			return Value{}, err
 		}
+		if v.Kind == 'S' || rhs.Kind == 'S' {
+			// + joins two character values (padding and all). Anything else
+			// involving text is a mistake that would otherwise be a silent
+			// NaN, so it's an error.
+			if op == "+" && v.Kind == 'S' && rhs.Kind == 'S' {
+				v = StringValue(v.Str + rhs.Str)
+				continue
+			}
+			return Value{}, fmt.Errorf("can't use %s between text and a number, or - between two texts", op)
+		}
 		if op == "+" {
 			v = NumberValue(v.AsFloat() + rhs.AsFloat())
 		} else {
@@ -422,6 +432,9 @@ func (p *exprParser) parseUnary() (Value, error) {
 		v, err := p.parseUnary()
 		if err != nil {
 			return Value{}, err
+		}
+		if v.Kind == 'S' {
+			return Value{}, fmt.Errorf("can't negate text")
 		}
 		return NumberValue(-v.AsFloat()), nil
 	}

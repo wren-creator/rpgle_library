@@ -92,3 +92,27 @@ test('comparing text with a number is still never equal', () => {
   assert.equal(evalExpr("'1' = 1", ctx), false);
   assert.equal(evalExpr('1 = 1', ctx), true);
 });
+
+// + joins two texts; text mixed with a number, - on text, and negating
+// text are errors rather than a silent NaN or "a1". (Parity with Python.)
+test('+ joins two character values, padding included', () => {
+  const ctx = { vars: { name: { type: 'A', length: 6, dec: 0, value: 'BOB   ' } }, indicators: {} };
+  assert.equal(evalExpr("'ab' + 'cd'", ctx), 'abcd');
+  assert.equal(evalExpr("name + 'x'", ctx), 'BOB   x'); // padding is part of the value
+  assert.equal(evalExpr('1 + 2', ctx), 3);
+  assert.equal(evalExpr('7 - 2', ctx), 5);
+});
+
+test('text and numbers do not mix in + and -', () => {
+  const ctx = { vars: {}, indicators: {} };
+  for (const src of ["'a' + 1", "1 + 'a'", "'a' - 1", "1 - 'a'", "'a' - 'b'"]) {
+    assert.throws(() => evalExpr(src, ctx), /text/i, src);
+  }
+});
+
+test('negating text is an error, negating a number still works', () => {
+  const ctx = { vars: {}, indicators: {} };
+  assert.throws(() => evalExpr("-'a'", ctx), /negate text/i);
+  assert.equal(evalExpr('-(2 + 3)', ctx), -5);
+  assert.equal(evalExpr('- -4', ctx), 4);
+});
