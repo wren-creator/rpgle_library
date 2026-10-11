@@ -52,4 +52,30 @@ for a in C["assign"]:
         g = run_program(parse_rpgle("     Dx                S              5  2\n     C                   EVAL      x = " + a + "\n     C                   EXFMT     X\n"), parse_dds("     A          R X\n     A            X              5  2O  1  1\n"))
         s = next(g); out["assign"].append({"ok": s.fields[0].text})
     except RpgleError: out["assign"].append({"error": True})
+# DISK files: each case is a whole program run against freshly seeded tables;
+# what is compared is what is left in every table, in key order.
+from rpgle.database import Database
+from rpgle.pf import parse_pf
+def files_case(case):
+    db = Database()
+    try:
+        pfs = {n: parse_pf(n, f["dds"]) for n, f in C["_files"]["pfs"].items()}
+        handles = {n: db.open_file(pf) for n, pf in pfs.items()}
+        for n, f in C["_files"]["pfs"].items():
+            for row in f["seed"]:
+                handles[n].write({fld.name: v for fld, v in zip(pfs[n].fields, row)})
+        list(run_program(parse_rpgle(case["source"]), parse_dds(""), db, pfs))
+        dump = {}
+        for n, h in handles.items():
+            h.setll(None)
+            rows = []
+            while (rec := h.read()) is not None:
+                rows.append([rec[fld.name] for fld in pfs[n].fields])
+            dump[n] = rows
+        return {"ok": dump}
+    except RpgleError:
+        return {"error": True}
+    finally:
+        db.close()
+out["files"] = [files_case(c) for c in C["files"]]
 json.dump(out, open(sys.argv[2], "w"))

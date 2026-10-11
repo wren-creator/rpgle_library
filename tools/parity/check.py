@@ -3,9 +3,10 @@
 
 Runs the same cases (cases.json) through all three ports and compares what each
 produced: expression results, screen text for numeric fields, how D-specs and
-other source lines parse, which block structures compile, and what happens when
-text is typed into a number field. Error *messages* may differ between ports;
-whether something is an error, and every value that isn't, must not.
+other source lines parse, which block structures compile, what happens when
+text is typed into a number field, and what whole programs do to DISK files.
+Error *messages* may differ between ports; whether something is an error, and
+every value that isn't, must not.
 
     python3 tools/parity/check.py            # exits 1 if any case differs
     python3 tools/parity/check.py --verbose  # also prints the cases that agree
@@ -26,6 +27,99 @@ import tempfile
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 PORTS = ("python", "js", "go")
+
+
+def _put(buf: list, start: int, text: str) -> None:
+    """Writes text at 1-based column start."""
+    for i, ch in enumerate(str(text)):
+        idx = start - 1 + i
+        while len(buf) <= idx:
+            buf.append(" ")
+        buf[idx] = ch
+
+
+def _line(spec: str) -> list:
+    return [" "] * 5 + [spec]
+
+
+def _done(buf: list) -> str:
+    return "".join(buf).rstrip()
+
+
+def _dds_line(row: list) -> str:
+    kind, name, length, dtype, dec, keywords = (list(row) + [""] * 6)[:6]
+    b = _line("A")
+    _put(b, 17, kind)
+    _put(b, 19, name)
+    if length != "":
+        _put(b, 30, str(length).rjust(5))
+    _put(b, 35, dtype)
+    if dec != "":
+        _put(b, 36, str(dec).rjust(2))
+    _put(b, 45, keywords)
+    return _done(b)
+
+
+def _fspec(name: str, keyed: bool, fmt: str = "E") -> str:
+    b = _line("F")
+    _put(b, 7, name)
+    _put(b, 17, "U")
+    _put(b, 18, "F")
+    _put(b, 20, "A")
+    _put(b, 22, fmt)
+    if keyed:
+        _put(b, 34, "K")
+    _put(b, 36, "DISK")
+    return _done(b)
+
+
+def _program_line(row: list) -> str:
+    """One line of a files case: ["D", name, length, dec, init] or [opcode, factor1, factor2, {options}]."""
+    if row[0] == "D":
+        _, name, length, dec, init = row
+        b = _line("D")
+        _put(b, 7, name)
+        _put(b, 24, "S")
+        _put(b, 33, str(length).rjust(7))
+        if dec is not None:
+            _put(b, 41, str(dec).rjust(2))
+        if init is not None:
+            _put(b, 45, f"INZ({init})")
+        return _done(b)
+    op, f1, f2, opts = (list(row) + ["", "", {}])[:4]
+    b = _line("C")
+    _put(b, 9, opts.get("cond", ""))
+    _put(b, 12, f1)
+    _put(b, 26, op)
+    _put(b, 36, f2)
+    _put(b, 50, opts.get("res", ""))
+    _put(b, 71, opts.get("hi", ""))
+    _put(b, 73, opts.get("lo", ""))
+    _put(b, 75, opts.get("eq", ""))
+    return _done(b)
+
+
+def expand_files(cases: dict) -> dict:
+    """The "files" cases are written compactly in cases.json (see the "_files"
+    fixture there); the ports are handed real fixed-form source and DDS text so
+    that each one's own parser is part of what is being compared.
+    """
+    fixture = cases["_files"]
+    out = dict(cases)
+    out["_files"] = {
+        "order": list(fixture),
+        "pfs": {n: {"dds": "\n".join(_dds_line(r) for r in f["dds"]) + "\n", "seed": f["seed"]} for n, f in fixture.items()},
+    }
+    programs = []
+    for case in cases["files"]:
+        body, declared = (case, list(fixture)) if isinstance(case, list) else (case["c"], case["files"])
+        fspecs = []
+        for d in declared:
+            name, fmt = (d, "E") if isinstance(d, str) else d
+            fspecs.append(_fspec(name, fixture[name]["keyed"], fmt))
+        programs.append({"source": "\n".join(fspecs + [_program_line(r) for r in body])})
+    out["files"] = programs
+    return out
 
 
 def run_ports(cases: pathlib.Path, tmp: pathlib.Path) -> dict:
@@ -78,6 +172,9 @@ def norm(x):
 
 
 def label(section: str, case) -> str:
+    if section == "files":
+        rows = case if isinstance(case, list) else case["c"]
+        return " ; ".join(" ".join(str(x) for x in r[:3] if x not in (None, "")) for r in rows)
     return " ; ".join(case) if isinstance(case, list) and all(isinstance(c, str) for c in case) else (
         " | ".join(str(c) for c in case) if isinstance(case, list) else str(case)
     )
@@ -91,10 +188,14 @@ def main() -> int:
 
     cases = json.loads(pathlib.Path(args.cases).read_text())
     with tempfile.TemporaryDirectory() as d:
-        results = run_ports(pathlib.Path(args.cases), pathlib.Path(d))
+        expanded = pathlib.Path(d) / "cases.json"
+        expanded.write_text(json.dumps(expand_files(cases)))
+        results = run_ports(expanded, pathlib.Path(d))
 
     total = differ = 0
     for section, items in cases.items():
+        if section.startswith("_"):
+            continue  # fixtures, not cases
         for i, case in enumerate(items):
             total += 1
             got = {p: norm(results[p][section][i]) for p in PORTS}

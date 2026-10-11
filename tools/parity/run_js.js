@@ -23,4 +23,34 @@ const DDS = "     A          R INQ                       CF03(03)\n     A       
 const PROG = "     FINQ       CF   E             WORKSTN\n     C                   EXFMT     INQ\n     C                   EXFMT     INQ\n";
 out.typed = C.typed.map((t) => safe(() => { const g = runProgram(parseRpgle(PROG), parseDds(DDS)); g.next(); const s = g.next({ key: "ENTER", values: { custno: t } }).value; return { ok: s.fields.filter((f) => f.input)[0].text }; }, { error: true }));
 out.assign = C.assign.map((a) => safe(() => { const g = runProgram(parseRpgle("     Dx                S              5  2\n     C                   EVAL      x = " + a + "\n     C                   EXFMT     X\n"), parseDds("     A          R X\n     A            X              5  2O  1  1\n")); return { ok: g.next().value.fields[0].text }; }, { error: true }));
+// DISK files: each case is a whole program run against freshly seeded tables;
+// what is compared is what is left in every table, in key order.
+const { Database } = require(root + "/src/database");
+const { parsePf } = require(root + "/src/pf");
+out.files = C.files.map((c) => {
+  let db;
+  try {
+    db = new Database();
+    const pfs = {};
+    const handles = {};
+    for (const [n, f] of Object.entries(C._files.pfs)) {
+      pfs[n] = parsePf(n, f.dds);
+      handles[n] = db.openFile(pfs[n]);
+      for (const row of f.seed) handles[n].write(Object.fromEntries(pfs[n].fields.map((fld, i) => [fld.name, row[i]])));
+    }
+    for (const _ of runProgram(parseRpgle(c.source), parseDds(""), { db, pfs })) { /* no screens */ }
+    const dump = {};
+    for (const [n, h] of Object.entries(handles)) {
+      h.setll(null);
+      const rows = [];
+      for (let rec = h.read(); rec; rec = h.read()) rows.push(pfs[n].fields.map((fld) => rec[fld.name]));
+      dump[n] = rows;
+    }
+    return { ok: dump };
+  } catch (e) {
+    return { error: true };
+  } finally {
+    if (db) db.close();
+  }
+});
 fs.writeFileSync(process.argv[3], JSON.stringify(out));
