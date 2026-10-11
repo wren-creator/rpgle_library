@@ -35,10 +35,12 @@ indicator when the program asked for one.
 
 from __future__ import annotations
 
+import math
 import sqlite3
 from typing import Any, Optional
 
 from .errors import RpgleError
+from .expr import as_float, as_string
 from .pf import PfField, PhysicalFile
 
 _RRN = "_rrn"
@@ -49,13 +51,26 @@ def _q(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
+def _as_number(name: str, value: Any) -> float:
+    """A value as a number: blank is zero, anything else must be a plain
+    number (the same rule as typing into a numeric field)."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return 0.0
+    n = as_float(value)
+    if not math.isfinite(n):
+        what = f"'{value.strip()}'" if isinstance(value, str) else "that value"
+        raise RpgleError(f"{name}: {what} is not a number")
+    return n
+
+
 def _to_db(f: PfField, value: Any) -> Any:
     """Program value -> stored value. Character data is stored without
-    trailing blanks so 'A' and 'A    ' are the same key, as in RPG.
+    trailing blanks so 'A' and 'A    ' are the same key, as in RPG, and a
+    number used as a character key reads as RPG would show it (20, not 20.0).
     """
     if f.dtype == "A":
-        return ("" if value is None else str(value)).rstrip()
-    n = float(value or 0)
+        return ("" if value is None else as_string(value)).rstrip()
+    n = _as_number(f.name, value)
     return int(n) if f.dec == 0 else n
 
 
@@ -88,7 +103,7 @@ class FileHandle:
         for col, v in zip(self.key_cols, values):
             f = self._key_field(col)
             if f is None:  # relative record number
-                out.append(int(float(v or 0)))
+                out.append(int(_as_number("relative record number", v)))
             else:
                 out.append(_to_db(f, v))
         return tuple(out)

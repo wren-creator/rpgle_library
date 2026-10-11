@@ -65,6 +65,20 @@ class KeyedAccessTest(unittest.TestCase):
         f.write({"N": "AB   "})
         self.assertIsNotNone(f.chain(("AB",)))
 
+    def test_numeric_keys_refuse_text_that_is_not_a_number(self):
+        with self.assertRaises(RpgleError):
+            self.f.chain(("abc",))
+        self.assertEqual(self.f.chain(("20  ",))["NAME"], "BOB")  # plain numbers in text are fine
+        self.assertEqual(self.f.chain((20.9,))["NAME"], "BOB")  # and a fraction is dropped
+
+    def test_a_number_used_as_a_character_key_reads_as_rpg_shows_it(self):
+        db = Database()
+        self.addCleanup(db.close)
+        pf = parse_pf("CODES", dds(dds_line("R", "R"), dds_line("", "C", 5), dds_line("K", "C")))
+        f = db.open_file(pf)
+        f.write({"C": "20"})
+        self.assertIsNotNone(f.chain((20.0,)))  # 20, not "20.0"
+
     def test_read_walks_in_key_order_then_eof(self):
         self.f.setll(None)
         names = []
