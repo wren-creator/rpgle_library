@@ -15,11 +15,15 @@ Behavior fixes, brought over from the Python port so all three agree. Bug fixes,
 - A `DIM` keyword, an O-spec, and a non-numeric length or decimals column are errors naming the field. They were silently skipped, so a program could run and quietly do the wrong thing. (A text literal that merely mentions `DIM(` is not an array.)
 - Letters typed into a number field are an error naming the field. JS showed `00NaN` and Go quietly turned `abc`, and even `12x`, into 0. A blank number field reads as zero. Only plain numbers are numbers: `1_000`, `0x10`, `inf` and `1,5` are not.
 - Dividing by zero, in an expression or with `DIV`, is an error instead of Infinity.
+- Text is counted in characters. Go's `%LEN` and `%SUBST` counted bytes (`%LEN('café')` was 5, and `%SUBST` could split a character), and JS counted UTF-16 units (an emoji was 2). Go's `%SUBST` with one argument indexed past its slice and would have panicked, and JS's `%SUBST` mishandled a start before the first character.
+- Only plain numbers are numbers in arithmetic and ordering as well: JS read `'0x10' * 1` as 16, and Go read `'1_000' * 1` as 1000.
+- Numbers become text as every digit when whole and the shortest round-trip digits otherwise, never in exponent form, in all three ports. Go printed whole numbers past 9.2e18 incorrectly (it went through a 64-bit integer).
 - A stray `ELSE`, `ENDIF`, `ENDDO`, `LEAVE`, `WHEN`, `OTHER` or `ENDSL` is a clean error (it crashed JS with a `TypeError`), and a `DOW`, `IF` or `SELECT` left open is a compile error naming it (both ports compiled it and crashed later).
 - JS no longer crashes when resumed with nothing (`gen.next()`).
 
 ### Added
 
+- **The built-in functions.** JS and Go had three (`%TRIM`, `%LEN`, `%SUBST`); they now have all twenty core functions the Python port has: `%TRIML`, `%TRIMR`, `%UPPER`, `%LOWER`, `%SCAN`, `%REPLACE`, `%CHAR`, `%DEC`, `%DECH`, `%INT`, `%INTH`, `%ABS`, `%SQRT`, `%REM`, `%DIV`, `%MIN`, `%MAX`. Also the `NOT` operator and the `*BLANKS` and `*ZEROS` constants. Go's are in the new `bifs.go`. `tools/parity/check.py` runs about 160 cases of them through all three ports, and mutation testing confirms it catches a break in any one function in any one port.
 - `numericFields` (JS) / `NumericFields` (Go) on the screen data: the input fields that hold numbers, so a front end can refuse letters as they are typed.
 
 ## 1.1.0 (Python port only), 2026-10-10
@@ -64,6 +68,7 @@ These are fixes. JS and Go still have the old behavior (see "Port parity" in the
 - A numeric field with decimals is shown with its decimal point (`0000048.75`), not rounded to a whole number.
 - `EXFMT` format names, file names and variable names are case-insensitive.
 - A fixed-form `DIM` keyword and any O-spec are now errors. They were silently ignored, so a program could run and quietly print nothing.
+- Built-in functions now reject a position, length or count that is not a number (it was a raw `ValueError`), limit `%DEC`'s decimals to 0 to 63, and print numbers in plain decimal, never exponent form.
 - Numeric text is strict: only an optional sign, ASCII digits, an optional decimal point and an optional exponent are numbers. Python's own `float()` also accepts `1_000` and Arabic-Indic digits, which JS and Go reject, so Python was tightened to match.
 - `requires-python` is now `>=3.12` (it said `>=3.9`, which was never tested). Nothing in the code needs anything newer than 3.9, so older versions may well work, but they are unsupported until someone runs the suite on them.
 - `parse_rpgle()` takes `path`, `include_dirs` and `defines`; `run_program()` takes `db`, `pfs`, `loader` and `spool`; `build_vars()` takes `pfs` and `prtfs`. All are optional, so existing callers are unaffected.

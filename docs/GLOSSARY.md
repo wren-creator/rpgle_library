@@ -20,7 +20,7 @@ The platform itself has been renamed several times without the underlying OS/400
 A list of values of one type, declared with `dim(n)`, numbered from 1: `price(3)`. An array of data structures is read as `line(i).qty`. RPG has no bounds-checking wraparound: a subscript outside 1 to `dim` is a runtime error, and so it is here. See "Arrays" in [`LANGUAGE.md`](./LANGUAGE.md).
 
 ### BIF (Built-In Function)
-A function whose name starts with `%` (`%TRIM`, `%LEN`, `%SUBST`, `%EOF`, ...), built into the compiler rather than something you write. The JS and Go ports implement three (`%TRIM`, `%LEN`, `%SUBST`); the Python port implements the working set, twenty-five of them, including `%CHAR`, `%DEC`, `%SCAN`, `%REPLACE`, `%LOOKUP`, `%ELEM` and the file-status functions. See [`LANGUAGE.md`](./LANGUAGE.md).
+A function whose name starts with `%` (`%TRIM`, `%LEN`, `%SUBST`, `%EOF`, ...), built into the compiler rather than something you write. All three ports implement the same twenty core functions (`%TRIM`, `%LEN`, `%SUBST`, `%CHAR`, `%DEC`, `%SCAN`, `%REPLACE` and so on); the Python port adds five that belong to files and arrays (`%EOF`, `%FOUND`, `%EQUAL`, `%ELEM`, `%LOOKUP`). See [`LANGUAGE.md`](./LANGUAGE.md).
 
 ### CALL / PARM / PLIST
 The classic fixed-form way for one program to call another. `CALL 'PGM'` names the program and the `PARM` lines under it name the fields passed; a `PLIST` is a named, reusable list of `PARM`s, and `*ENTRY PLIST` is the called program's own parameter list. Parameters are passed by reference: the called program works on the caller's variables. The free-form equivalent is a prototype with `extpgm` plus `dcl-pi` in the called program.

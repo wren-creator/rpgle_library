@@ -54,7 +54,8 @@ The honest pitch: run, test and port RPG logic anywhere, not replace IBM i. Syst
 | `/COPY` and `/INCLUDE` | no | no | yes |
 | Calls between programs (`CALL`/`PARM`, `extpgm`) | no | no | yes |
 | Printer files and edit codes | no | no | yes |
-| Built-in functions beyond `%TRIM`, `%LEN`, `%SUBST` | no | no | yes |
+| The 20 core built-in functions (`%TRIM`, `%CHAR`, `%SCAN`, `%DEC`, ...), `NOT`, `*BLANKS`/`*ZEROS` | yes | yes | yes |
+| File-status and array functions (`%EOF`, `%FOUND`, `%ELEM`, `%LOOKUP`) | no | no | yes |
 
 ### Python versions
 
@@ -180,8 +181,8 @@ evalExpr("%TRIM('  hi  ')", { vars: {}, indicators: {} });   // 'hi'
 | `/COPY`, `/INCLUDE`, `/IF DEFINED`/`/DEFINE`/`/EOF` | Python only | See [`docs/LANGUAGE.md`](./docs/LANGUAGE.md) |
 | Printer files: `dcl-f ... printer`, `WRITE` a record format, `OFLIND`, `EDTCDE`, `PAGNBR`, `SKIPB`/`SPACEA`... (not O-specs) | Python only | Output goes to stdout or `--spool-dir`. See [`docs/LANGUAGE.md`](./docs/LANGUAGE.md) |
 | `CALL`/`PARM`/`PLIST`/`*ENTRY` and `callp` to `dcl-pr ... extpgm`: one program calling another by name | Python only | Looked up in the caller's folder, then `-I` folders. See [`docs/LANGUAGE.md`](./docs/LANGUAGE.md) |
-| `%TRIM`, `%LEN`, `%SUBST` | Yes | |
-| `%TRIML`/`%TRIMR`, `%UPPER`/`%LOWER`, `%SCAN`, `%REPLACE`, `%CHAR`, `%DEC`/`%DECH`, `%INT`/`%INTH`, `%ABS`, `%SQRT`, `%REM`, `%DIV`, `%MIN`/`%MAX`, `%EOF`/`%FOUND`/`%EQUAL` | Python only | Not yet: `%EDITC`, `%EDITW`, `%XLATE`, `%CHECK`, date and time functions |
+| The 20 core built-in functions: `%TRIM` `%TRIML` `%TRIMR` `%UPPER` `%LOWER` `%LEN` `%SUBST` `%SCAN` `%REPLACE` `%CHAR` `%DEC` `%DECH` `%INT` `%INTH` `%ABS` `%SQRT` `%REM` `%DIV` `%MIN` `%MAX`, and `NOT`, `*BLANKS`, `*ZEROS` | Yes | All three ports, checked by `tools/parity/check.py` |
+| `%EOF`, `%FOUND`, `%EQUAL`, `%ELEM`, `%LOOKUP` | Python only | They belong to files and arrays. Not yet: `%EDITC`, `%EDITW`, `%XLATE`, `%CHECK`, date and time functions |
 
 Full detail: [`docs/LANGUAGE.md`](./docs/LANGUAGE.md).
 
@@ -259,14 +260,15 @@ Goal: run and test RPG IV logic on Linux, macOS or Windows, with no IBM i licens
 
 - [ ] **5. Port parity.** Bring JS and Go up to the Python port. See "Coming to the JS and Go ports" below
   - [x] 5a. The behavior fixes, checked by `tools/parity/check.py` and CI
-  - [ ] 5b. Features, in the order listed below
+  - [x] 5b-i. The built-in functions, `NOT` and the figurative constants
+  - [ ] 5b-ii. The rest of the features, in the order listed below
 
 ### Coming to the JS and Go ports
 
 The Python port is the reference. These are planned for the JS and Go ports, roughly in this order, with nothing promised by a date:
 
 1. ~~**The behavior fixes**~~ **Done**, and checked by `tools/parity/check.py` in CI. Every feature below is ported with its parity cases added to `tools/parity/cases.json`, so the check keeps all three honest as they grow.
-2. **The built-in functions** (next) beyond `%TRIM`, `%LEN` and `%SUBST` (about twenty more), and `NOT`, `*BLANKS`/`*ZEROS` and the overflow indicators in the expression language.
+2. ~~**The built-in functions**~~ **Done**: all twenty core functions, `NOT` and `*BLANKS`/`*ZEROS`, with 160 parity cases. (The file-status and array functions come with the files and arrays; the overflow indicators come with printer files.)
 3. **DISK files**, with the same keyed-access model (`CHAIN`, `SETLL`, `READ`, `READE`, `WRITE`, `UPDATE`, `DELETE`) on SQLite, which means choosing a database library for each language.
 4. **Free-form RPG** (`**FREE`): declarations, loops, procedures, data structures and arrays.
 5. **`/COPY` includes**, **calls between programs**, and **printer files**.

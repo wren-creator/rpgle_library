@@ -434,11 +434,11 @@ primary    := NUMBER | STRING | '*ON' | '*OFF'
             | '(' expr ')'
 ```
 
-The JS and Go grammars stop at the `*IN` forms and the `%` functions: no `NOT`, no figurative constants beyond `*ON`/`*OFF`, and no subscripts or calls, since those ports have no arrays, data structures or procedures.
+All three ports share the grammar down to `*BLANKS`/`*ZEROS` and the `%` functions. The JS and Go ports have no subscripts, `ds.field` names or procedure calls, since they have no arrays, data structures or procedures, and no overflow indicators, since they can't print.
 
 ### Built-in functions
 
-The JS and Go ports have `%TRIM(str)`, `%LEN(str)` and `%SUBST(str : start [: len])` (1-based start, matching real RPG). The Python port has these and more:
+All three ports have the twenty core functions below, and they agree on every edge case (`tools/parity/check.py` runs about 160 of them through all three). Only `%EOF`, `%FOUND`, `%EQUAL`, `%ELEM` and `%LOOKUP`, which belong to files and arrays, are Python only.
 
 | Function | Result |
 |---|---|
@@ -454,6 +454,8 @@ The JS and Go ports have `%TRIM(str)`, `%LEN(str)` and `%SUBST(str : start [: le
 | `%ABS` `%SQRT` `%REM(a : b)` `%DIV(a : b)` | what they say; `%REM`/`%DIV` by zero is an error |
 | `%MIN(a : b ...)` `%MAX(a : b ...)` | smallest or largest, numbers or text |
 | `%EOF` `%FOUND` `%EQUAL` | file status, see "DISK Files" |
+
+**Edge rules, the same in all three ports.** Text is counted in characters, not bytes or UTF-16 units, so `%LEN('café')` is 4 and an emoji is 1. `%SUBST` clamps a start or length that runs off either end instead of failing, and `%SCAN` and `%REPLACE` do the same. A position, length or count must be a number (`%SUBST('abc' : 'x')` is an error), and `%DEC` takes 0 to 63 decimal positions, as RPG does. `%MIN` and `%MAX` on text compare without trailing blanks but return the original value, and the first of equal values wins. A number becomes text as every digit when it is whole and the shortest digits that round-trip otherwise, never in exponent form (`%CHAR(0.0000001)` is `0.0000001`). `%UPPER` and `%LOWER` follow each language's own case mapping, so the parity cases keep to ASCII there.
 
 Text and numbers don't mix, **in all three ports**: `'a' + 1`, `'a' - 'b'` and `-'a'` are errors, not a silent NaN. In the Python port, convert with `%CHAR` or `%DEC`. `+` between two character values joins them, padding included, so `%TRIM` the pieces you don't want padded. Anything not listed throws `Unsupported RPG built-in`.
 
@@ -478,7 +480,7 @@ Nothing here is an oversight: each is documented where it matters, and each is a
 - **Language:** `MONITOR`/`ON-ERROR` and `%ERROR`, the `(E)` opcode extender, `DSPLY`, date, time and timestamp types, pointers, `%EDITC`/`%EDITW`/`%XLATE`, `*OMIT`, `%PARMS`, procedures taking data structures as parameters, arrays inside data structures.
 - **Files:** subfiles and windows in display DDS, DDS keyword continuation lines, OR'd and multi-line indicator conditions, `DESCEND` keys, joined and select/omit logical files, `READC`, user-controlled open/close.
 - **Printing:** overprinting (`SPACEA(0)`), `DATE`/`TIME`/`USER`/`SYSNAME` fields, `EDTWRD`, edit codes outside the supported set, barcodes.
-- **The JS and Go ports** have none of the Python runtime (free-form, files, includes, calls, printing, the built-in functions beyond three). See the root README's "Status by language".
+- **The JS and Go ports** have none of the Python runtime (free-form, files, includes, calls, printing, arrays). See the root README's "Status by language".
 
 ## See Also
 
