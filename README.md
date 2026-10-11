@@ -60,19 +60,21 @@ The honest pitch: run, test and port RPG logic anywhere, not replace IBM i. Syst
 
 The Python port **requires Python 3.12 or newer** and is **tested on 3.12, 3.13 and 3.14**: the same test suite runs on all three in CI. Version 1.1.0. The JS port declares Node 16 or newer in `package.json` and CI tests it on Node 22 and 24; the Go module declares Go 1.21 and CI tests it there.
 
-### Port parity: known differences
+### Port parity
 
-`docs/PUBLISHING.md` says the three ports should behave identically for any input all three support. That is **no longer fully true**. While building the Python runtime, these behaviors were corrected in Python only, and the JS and Go ports still have the old behavior:
+`docs/PUBLISHING.md` says the three ports behave identically for any input all three support, and that is now **checked, not just promised**. `python3 tools/parity/check.py` runs the same cases (expressions, text and number rules, screen text, how source parses, which blocks compile, what happens when you type into a number field) through Python, JS and Go and compares the results. All of them agree, CI runs it on every push, and it was verified by breaking each port in turn and watching it catch the break.
 
-| Behavior | Python | JS and Go |
-|---|---|---|
-| Comparing character values | ignores trailing blanks, as RPG does (`name = 'BOB'` is true for `BOB` plus padding) | compares exactly, so a padded field never equals a literal |
-| `+` and `-` on text | `+` joins two texts; text with a number, or `-` on text, is an error that says to use `%CHAR` or `%DEC` | JS: `+` joins, and `'a' + 1` is `"a1"`; `'a' - 'b'` is `NaN`. Go: any of these is `NaN`, even `'a' + 'b'` |
-| Showing a number with decimals on a screen | with a decimal point (`0000048.75`) so it survives being typed back in | rounded to a whole number |
-| `EXFMT` format name | case-insensitive | case-sensitive |
-| Unsupported source (`DIM` in a fixed-form D-spec, O-specs) | an error | ignored silently |
+Earlier versions of this README listed five behaviors where JS and Go differed from Python. They have been brought into line, in both ports, with tests:
 
-I checked each row against the JS and Go ports directly (not from memory). Porting these fixes to JS and Go is on the roadmap below. Until then, treat the Python port as the reference for these behaviors.
+- character values compare as if blank-padded (`name = 'BOB'` is true for a 20-character field holding `BOB`)
+- `+` joins two texts, and text mixed with a number, `-` on text, and negating text are errors (JS gave `"a1"` or `NaN`; Go gave `NaN` for all of it, even `'a' + 'b'`)
+- a number with decimals is shown with its decimal point (`0000048.75`), not rounded to `0000049`
+- `EXFMT` finds its record format ignoring case
+- a `DIM` keyword, an O-spec and a non-numeric length are errors instead of being silently skipped
+
+and some crashes were fixed in the same pass: letters typed into a number field (JS showed `00NaN`, Go quietly made it 0), dividing by zero, and stray or unclosed `IF`/`DOW`/`SELECT` blocks. Error *messages* still differ between ports; whether something is an error does not.
+
+What still differs is **features**, not behavior: see the table above.
 
 ---
 
@@ -256,13 +258,15 @@ Goal: run and test RPG IV logic on Linux, macOS or Windows, with no IBM i licens
   - [x] 4d. `PRINTER` files: externally described, page layout, overflow, edit codes, spool output
 
 - [ ] **5. Port parity.** Bring JS and Go up to the Python port. See "Coming to the JS and Go ports" below
+  - [x] 5a. The behavior fixes, checked by `tools/parity/check.py` and CI
+  - [ ] 5b. Features, in the order listed below
 
 ### Coming to the JS and Go ports
 
 The Python port is the reference. These are planned for the JS and Go ports, roughly in this order, with nothing promised by a date:
 
-1. **The behavior fixes**, so all three agree again: blank-insensitive character comparison, errors instead of `NaN` for text arithmetic, decimals shown on screen, case-insensitive `EXFMT` names, and errors instead of silent skips for fixed-form `DIM` and O-specs. This one comes first, because it restores the "all three behave the same" promise in `docs/PUBLISHING.md`.
-2. **The built-in functions** beyond `%TRIM`, `%LEN` and `%SUBST` (about twenty more), and `NOT`, `*BLANKS`/`*ZEROS` and the overflow indicators in the expression language.
+1. ~~**The behavior fixes**~~ **Done**, and checked by `tools/parity/check.py` in CI. Every feature below is ported with its parity cases added to `tools/parity/cases.json`, so the check keeps all three honest as they grow.
+2. **The built-in functions** (next) beyond `%TRIM`, `%LEN` and `%SUBST` (about twenty more), and `NOT`, `*BLANKS`/`*ZEROS` and the overflow indicators in the expression language.
 3. **DISK files**, with the same keyed-access model (`CHAIN`, `SETLL`, `READ`, `READE`, `WRITE`, `UPDATE`, `DELETE`) on SQLite, which means choosing a database library for each language.
 4. **Free-form RPG** (`**FREE`): declarations, loops, procedures, data structures and arrays.
 5. **`/COPY` includes**, **calls between programs**, and **printer files**.

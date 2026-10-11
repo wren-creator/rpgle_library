@@ -114,7 +114,7 @@ A statement is everything up to a semicolon: it can span lines, and several can 
 
 **`ind`** variables hold `'1'` or `'0'`, as in real RPG, but read and assign as booleans: `ok = *on; if not ok; ...`.
 
-**Character comparison** ignores trailing blanks (`name = 'BOB'` is true for a 20-character `name` holding `BOB` and 17 blanks), as RPG does. This applies to fixed-form too.
+**Character comparison** ignores trailing blanks (`name = 'BOB'` is true for a 20-character `name` holding `BOB` and 17 blanks), as RPG does. This applies to fixed-form too, and to all three ports.
 
 **Opcode extenders** `(n)`, `(p)`, `(h)` are accepted and ignored. `(e)` raises an error, since it needs `%ERROR`.
 
@@ -455,7 +455,7 @@ The JS and Go ports have `%TRIM(str)`, `%LEN(str)` and `%SUBST(str : start [: le
 | `%MIN(a : b ...)` `%MAX(a : b ...)` | smallest or largest, numbers or text |
 | `%EOF` `%FOUND` `%EQUAL` | file status, see "DISK Files" |
 
-Text and numbers don't mix: `'a' + 1` is an error, not a silent NaN. Convert with `%CHAR` or `%DEC`. `+` between two character values joins them, padding included, so `%TRIM` the pieces you don't want padded. Anything not listed throws `Unsupported RPG built-in`.
+Text and numbers don't mix, **in all three ports**: `'a' + 1`, `'a' - 'b'` and `-'a'` are errors, not a silent NaN. In the Python port, convert with `%CHAR` or `%DEC`. `+` between two character values joins them, padding included, so `%TRIM` the pieces you don't want padded. Anything not listed throws `Unsupported RPG built-in`.
 
 ### Figurative constants
 

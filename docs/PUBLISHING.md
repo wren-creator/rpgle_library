@@ -97,6 +97,17 @@ This library follows [Semantic Versioning](https://semver.org/):
 
 The JS, Go, and Python implementations are meant to behave identically for any input all three support. A behavior change in one that isn't mirrored in the others should be treated as a bug, not shipped as a version bump in only one language.
 
-**Where that stands today:** the Python port has grown a full runtime (free-form RPG, files, calls, printing) that JS and Go don't have, and a handful of behaviors were corrected in Python only. The list is in the root README under "Port parity: known differences", and porting the fixes is roadmap item 5. Until it's done, don't describe a release as "all three ports behave the same"; describe the Python port's extra features as Python-only, as the docs do.
+**Where that stands today:** the three ports agree on every case in `tools/parity/cases.json`, and CI checks it. What differs is features: the Python port has a full runtime (free-form RPG, files, calls, printing) that JS and Go don't have yet, and the root README's "Status by language" says exactly which. A feature that exists in only some ports is fine; the same input giving different answers is not.
 
-**Versions today.** The Python port is at **1.1.0** and the JS and Go ports are at **1.0.0**: the Python port gained a great deal (new opcodes, DDS support and API), a minor bump under the policy above, while the other two are unchanged. Bring JS and Go to 1.1.0 when they gain the same features (see "Coming to the JS and Go ports" in the README), or earlier for a coordinated release. **Python versions:** `requires-python` is `>=3.12`; the test suite and CI run on 3.12, 3.13 and 3.14, and nothing older has been tested.
+### Checking port parity
+
+```bash
+python3 tools/parity/check.py            # exits 1 if any case differs
+python3 tools/parity/check.py --verbose  # also lists the cases that agree
+```
+
+It needs `python3`, `node` and `go` on the PATH. Each port has a small runner (`run_py.py`, `run_js.js`, and `go/parity_dump_test.go`, which does nothing during a normal `go test`) that reads `tools/parity/cases.json` and writes what it got; `check.py` compares them. Error *messages* may differ between ports; whether something is an error, and every value that isn't, may not.
+
+**When you change a behavior in one port, add a case to `cases.json` first** and watch the check fail in the ports you haven't changed yet. That failure is the point: it is how a behavior difference gets found instead of shipped. When you port a feature, add its cases the same way.
+
+**Versions today.** The Python port is at **1.1.0**: it gained a great deal (new opcodes, DDS support and API), a minor bump under the policy above. The JS and Go ports are still **1.0.0** but have unreleased behavior fixes (see the changelog), which are bug fixes, so publish them as **1.0.1** (the Go module is released by tag, `v1.0.1`). Move them to 1.1.0 when they gain the features that make the Python port 1.1.0. **Python versions:** `requires-python` is `>=3.12`; the test suite and CI run on 3.12, 3.13 and 3.14, and nothing older has been tested.

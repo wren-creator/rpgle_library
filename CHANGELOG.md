@@ -2,6 +2,26 @@
 
 Versions follow [`docs/PUBLISHING.md`](./docs/PUBLISHING.md). Everything below is in the **Python port** unless it says otherwise; the JS and Go ports are unchanged since 1.0.0 (their parity work is listed under "Coming to the JS and Go ports" in the README). See "Status by language" and "Port parity" in the [README](./README.md).
 
+## Unreleased (JS and Go)
+
+Behavior fixes, brought over from the Python port so all three agree. Bug fixes, so the next release of each is a patch (1.0.1). Each is covered by tests that mirror the Python ones, and `tools/parity/check.py` (new, and run in CI) checks the three ports against the same 119 cases.
+
+### Fixed
+
+- Character values compare as if blank-padded: `name = 'BOB'` is now true for a 20-character field holding `BOB`. Before, JS and Go compared exactly.
+- `+` joins two texts. Text mixed with a number, `-` on text, and negating text are errors. Before, JS gave `"a1"` or `NaN` and Go gave `NaN` for every one of them, so Go could not join text at all.
+- A number with decimals is shown with its decimal point (`0000048.75`) instead of being rounded to a whole number (`0000049`), so what is on screen survives being typed back in.
+- `EXFMT` finds its record format ignoring case, and reports the DDS's own spelling.
+- A `DIM` keyword, an O-spec, and a non-numeric length or decimals column are errors naming the field. They were silently skipped, so a program could run and quietly do the wrong thing. (A text literal that merely mentions `DIM(` is not an array.)
+- Letters typed into a number field are an error naming the field. JS showed `00NaN` and Go quietly turned `abc`, and even `12x`, into 0. A blank number field reads as zero. Only plain numbers are numbers: `1_000`, `0x10`, `inf` and `1,5` are not.
+- Dividing by zero, in an expression or with `DIV`, is an error instead of Infinity.
+- A stray `ELSE`, `ENDIF`, `ENDDO`, `LEAVE`, `WHEN`, `OTHER` or `ENDSL` is a clean error (it crashed JS with a `TypeError`), and a `DOW`, `IF` or `SELECT` left open is a compile error naming it (both ports compiled it and crashed later).
+- JS no longer crashes when resumed with nothing (`gen.next()`).
+
+### Added
+
+- `numericFields` (JS) / `NumericFields` (Go) on the screen data: the input fields that hold numbers, so a front end can refuse letters as they are typed.
+
 ## 1.1.0 (Python port only), 2026-10-10
 
 The JS and Go ports stay at 1.0.0. **Requires Python 3.12 or newer; tested on 3.12, 3.13 and 3.14** (CI runs all three).
@@ -44,6 +64,7 @@ These are fixes. JS and Go still have the old behavior (see "Port parity" in the
 - A numeric field with decimals is shown with its decimal point (`0000048.75`), not rounded to a whole number.
 - `EXFMT` format names, file names and variable names are case-insensitive.
 - A fixed-form `DIM` keyword and any O-spec are now errors. They were silently ignored, so a program could run and quietly print nothing.
+- Numeric text is strict: only an optional sign, ASCII digits, an optional decimal point and an optional exponent are numbers. Python's own `float()` also accepts `1_000` and Arabic-Indic digits, which JS and Go reject, so Python was tightened to match.
 - `requires-python` is now `>=3.12` (it said `>=3.9`, which was never tested). Nothing in the code needs anything newer than 3.9, so older versions may well work, but they are unsupported until someone runs the suite on them.
 - `parse_rpgle()` takes `path`, `include_dirs` and `defines`; `run_program()` takes `db`, `pfs`, `loader` and `spool`; `build_vars()` takes `pfs` and `prtfs`. All are optional, so existing callers are unaffected.
 
