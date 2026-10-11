@@ -260,13 +260,29 @@ custlookup(custno : who);                  ...
 
 **`*INLR` decides whether it stays.** A called program that ends with `*INLR` **on** is finished: the next call starts it from scratch. One that ends with `*INLR` **off** stays active, as in real RPG. Its variables, indicators and file positions survive to the next call, which re-enters its main line from the top with the new parameters. That's how a subprogram keeps a running total or reads a file one record per call. (A program that fails with an error is not kept.)
 
+**Fixed-form** programs call and are called the classic way, and the two forms mix freely:
+
+```
+     C     *ENTRY        PLIST                       the called program's parameters
+     C                   PARM                    ID
+     C                   PARM                    NM
+                                                       the caller
+     C                   CALL      'CUSTLOOKUP'                       72  <- error
+     C                   PARM                    WANT                     (lo, 73-74)
+     C                   PARM                    WHO
+```
+
+`PARM` names its field in the result column (factor 1 and 2 aren't supported and are an error, not ignored). A callee's `*ENTRY` fields must be declared as standalone fields (D-spec `S`) in the callee; their types decide what a caller may pass. A caller can write its parameters under `CALL` or name a shared `PLIST` in the result column: `CALL 'PGM' MYPLIST`. `CALL PGMVAR` (no quotes) takes the program name from a variable. Fewer `PARM`s than the callee declares is allowed, as in RPG, and a fixed-form callee can be passed an expression by a free-form caller (it works on a temporary).
+
+`CALL`'s resulting indicators: **lo (73-74)** is set when the call can't be made (program not found, parameters of the wrong kind, a program calling itself), and **eq (75-76)** is set when the called program ended with `*INLR` on. With no lo indicator, a failed call raises instead.
+
 **A program can't call itself**, directly or through another program. That's a runtime error in real RPG (use a procedure for recursion), and here too. Calling the main program by its own name counts.
 
 **Errors.** A call that can't be made (program not found, parameters that don't fit, a program calling itself) is a `CallError`. An error raised *while the called program runs* is that program's, and propagates with its file name: `broken.rpgle:3: unrecognized statement`.
 
 From Python, pass a `ProgramLoader`: `run_program(prog, dds, db, pfs, loader=ProgramLoader([folder], main=path))`. The `rpgle` command builds one for you. A called program that uses files needs `--db` even if the main program doesn't: `programs/custinq-call.rpgle` is a screen with no files that calls `programs/custlookup.rpgle`, which owns the customer file.
 
-Not supported yet: fixed-form `CALL`/`PARM`/`PLIST` (next), `extproc` and service programs, `CALLB`, `extpgm` with a variable name, `*OMIT`, `%PARMS`, activation groups, and the called program's `return` value.
+Not supported yet: `extproc` and service programs, `CALLB`, `extpgm` with a variable name, `*OMIT`, `%PARMS`, activation groups, and the called program's `return` value.
 
 ## DISK Files
 

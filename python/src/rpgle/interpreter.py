@@ -218,6 +218,7 @@ class Instr:
     step: Optional[str] = None  # FORINIT: the BY increment
     down: bool = False  # FORINIT/FORTEST: DOWNTO
     ds: Optional[str] = None  # file ops: data structure to read into / write from
+    params: list[str] = field(default_factory=list)  # CALL: the PARM fields that followed it
 
 
 @dataclass
@@ -228,6 +229,7 @@ class Compiled:
     subroutines: dict[str, int]
     klists: dict[str, list[str]] = field(default_factory=dict)  # KLIST name -> KFLD field names
     entry_params: list[str] = field(default_factory=list)  # fixed-form *ENTRY PLIST: the parameters a caller passes
+    plists: dict[str, list[str]] = field(default_factory=dict)  # PLIST name -> PARM field names
 
 
 def compile_program(statements) -> Compiled:
@@ -248,6 +250,10 @@ def compile_program(statements) -> Compiled:
     sel_stack: list[dict] = []
     klists: dict[str, list[str]] = {}
     current_klist: Optional[str] = None
+    plists: dict[str, list[str]] = {}
+    entry_params: list[str] = []
+    current_plist: Optional[list[str]] = None  # between a PLIST and its PARMs
+    last_call: Optional[Instr] = None  # a CALL whose PARMs may follow
 
     for stmt in statements:
         op = stmt.op
@@ -445,20 +451,49 @@ def compile_program(statements) -> Compiled:
                 raise RpgleError("KFLD with no KLIST before it")
             klists[current_klist].append(stmt.result)
 
+        elif op == "PLIST":
+            name = (stmt.factor1 or "").upper()
+            if not name:
+                raise RpgleError("PLIST needs a name in factor 1 (*ENTRY for the program's own parameters)")
+            current_plist = entry_params if name == "*ENTRY" else plists.setdefault(name, [])
+
+        elif op == "PARM":
+            if stmt.factor1 or stmt.factor2:
+                raise RpgleError("PARM with a factor 1 or factor 2 is not supported; name the field in the result column")
+            if not stmt.result:
+                raise RpgleError("PARM needs a field name in the result column")
+            target = last_call.params if last_call is not None else current_plist
+            if target is None:
+                raise RpgleError("PARM with no CALL or PLIST before it")
+            target.append(stmt.result)
+
+        elif op == "CALL":
+            if not stmt.factor2:
+                raise RpgleError("CALL needs a program name in factor 2: CALL 'PROGRAM'")
+            instrs.append(
+                Instr(op="CALL", factor2=stmt.factor2, result=stmt.result, ind_lo=stmt.ind_lo, ind_eq=stmt.ind_eq)
+            )
+
         else:
             raise RpgleError(f"Unsupported RPG opcode: {op}")
 
         for ins in instrs[start:]:
             ins.cond = cond
+        if op != "PARM":  # PARMs belong to the CALL or PLIST just before them, nothing further back
+            last_call = instrs[-1] if op == "CALL" else None
+            if op != "PLIST":
+                current_plist = None
 
-    return Compiled(instrs=instrs, subroutines=subroutines, klists=klists)
+    return Compiled(
+        instrs=instrs, subroutines=subroutines, klists=klists, entry_params=entry_params, plists=plists
+    )
 
 
 # Ops that expand into jumps, so skipping one on a condition would
 # desynchronize the jump targets. Real RPG allows conditioning these;
 # here it's rejected loudly rather than run wrong.
 _NO_COND_OPS = frozenset(
-    {"IF", "ELSE", "ELSEIF", "ENDIF", "DOW", "DOU", "FOR", "ENDDO", "ENDFOR", "SELECT", "WHEN", "OTHER", "ENDSL", "BEGSR", "ENDSR", "KLIST", "KFLD"}
+    {"IF", "ELSE", "ELSEIF", "ENDIF", "DOW", "DOU", "FOR", "ENDDO", "ENDFOR", "SELECT", "WHEN", "OTHER", "ENDSL", "BEGSR", "ENDSR", "KLIST", "KFLD", "PLIST", "PARM"}
 )
 _COND_RE = re.compile(r"^(N?)(\d\d|LR)$", re.IGNORECASE)
 
@@ -817,6 +852,7 @@ class _Frame:
     ctx: Context
     ds_members: dict[str, list[tuple[str, DSpec]]]
     ds_prefix: dict[str, str] = field(default_factory=dict)  # data structure -> "name." if qualified
+    plists: dict[str, list[str]] = field(default_factory=dict)  # fixed-form PLISTs a CALL can name
     call_stack: list[int] = field(default_factory=list)  # EXSR return addresses
     for_state: dict[int, tuple[float, float]] = field(default_factory=dict)  # FORTEST index -> (limit, by)
 
@@ -897,6 +933,7 @@ class _Runtime:
             ctx=self.context(self.globals),
             ds_members=self.global_ds,
             ds_prefix=self.global_prefix,
+            plists=compiled.plists,
         )
 
     def _proc_frame(self, name: str, args: list) -> tuple[ProcSpec, _Frame]:
@@ -1156,6 +1193,35 @@ class _Runtime:
                     lambda src: eval_expr(src, ctx),
                     frame.ds_prefix,
                 )
+                pc += 1
+
+            elif op == "CALL":
+                target = instr.factor2.strip()
+                if target.startswith("'"):
+                    program = target.strip("'")
+                else:  # CALL PGMVAR: the name is in a variable
+                    program = as_string(eval_expr(target, ctx)).strip()
+                names = instr.params
+                if instr.result and not names:
+                    names = frame.plists.get(instr.result.upper())
+                    if names is None:
+                        raise RpgleError(f"CALL names PLIST {instr.result}, which is not defined")
+                args = []
+                for n in names:
+                    v = variables.get(n.lower())
+                    if v is None:
+                        raise RpgleError(f"PARM field {n} is not declared")
+                    args.append((_py_value(v), v))
+                try:
+                    last_record = yield from self.call_program(program, args, lenient_ref=True)
+                    failed = False
+                except CallError:
+                    if not instr.ind_lo:
+                        raise
+                    last_record, failed = False, True
+                for ind, on in ((instr.ind_lo, failed), (instr.ind_eq, last_record)):
+                    if ind:
+                        indicators[ind] = on
                 pc += 1
 
             elif op == "CALLP":

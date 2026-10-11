@@ -120,7 +120,7 @@ evalExpr("%TRIM('  hi  ')", { vars: {}, indicators: {} });   // 'hi'
 | Arrays (`dim`), `%elem`, `%lookup`, `sorta`, arrays of data structures | Free-form, Python only | Fixed-form `DIM` raises an error |
 | DISK file I/O: `CHAIN`, `SETLL`, `SETGT`, `READ`, `READE`, `READP`, `READPE`, `WRITE`, `UPDATE`, `DELETE`, `KLIST`/`KFLD`, `%EOF`/`%FOUND`/`%EQUAL` | Python only | Backed by SQLite. See [`docs/LANGUAGE.md`](./docs/LANGUAGE.md) |
 | `/COPY`, `/INCLUDE`, `/IF DEFINED`/`/DEFINE`/`/EOF` | Python only | See [`docs/LANGUAGE.md`](./docs/LANGUAGE.md) |
-| `callp` to another program (`dcl-pr ... extpgm`), looked up by name | Free-form, Python only | Fixed-form `CALL`/`PARM` still to come. See [`docs/LANGUAGE.md`](./docs/LANGUAGE.md) |
+| `CALL`/`PARM`/`PLIST`/`*ENTRY` and `callp` to `dcl-pr ... extpgm`: one program calling another by name | Python only | Looked up in the caller's folder, then `-I` folders. See [`docs/LANGUAGE.md`](./docs/LANGUAGE.md) |
 | `%TRIM`, `%LEN`, `%SUBST` | Yes | |
 | `%TRIML`/`%TRIMR`, `%UPPER`/`%LOWER`, `%SCAN`, `%REPLACE`, `%CHAR`, `%DEC`/`%DECH`, `%INT`/`%INTH`, `%ABS`, `%SQRT`, `%REM`, `%DIV`, `%MIN`/`%MAX`, `%EOF`/`%FOUND`/`%EQUAL` | Python only | Not yet: `%EDITC`, `%EDITW`, `%XLATE`, `%CHECK`, date and time functions |
 
@@ -193,9 +193,7 @@ Goal: run and test RPG IV logic on Linux, macOS or Windows, with no IBM i licens
 - [ ] **4. Calls and structures.** (Data structures and `CALLP` shipped with 3c and 3d.)
   - [x] 4a. Arrays: `dim`, `%elem`, `%lookup`, `sorta`, arrays of data structures, array parameters
   - [x] 4b. `/COPY` and `/INCLUDE`, with `/IF DEFINED`, `/DEFINE`, `/EOF` guards (`-I`, `-D`)
-  - [ ] 4c. `CALL` between programs
-    - [x] free-form: `dcl-pr extpgm`, program `dcl-pi`, same-folder lookup, retained state when `*INLR` is off
-    - [ ] fixed-form: `CALL`, `PARM`, `PLIST`, `*ENTRY`
+  - [x] 4c. `CALL` between programs: same-folder lookup, `dcl-pr extpgm` and `CALL`/`PARM`/`PLIST`/`*ENTRY`, retained state when `*INLR` is off
   - [ ] 4d. `PRINTER` files
 
 This will not be a drop-in replacement for the IBM compiler. System APIs, CL, data areas, job and spool behavior, and ILE binding are out of scope. The pitch is run, test and port RPG logic anywhere, not replace IBM i.
