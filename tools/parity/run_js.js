@@ -1,0 +1,26 @@
+// Runs the parity cases through the JS port. Usage: node run_js.js CASES.json OUT.json
+const fs = require("fs");
+const path = require("path");
+const root = path.resolve(__dirname, "..", "..");
+const { evalExpr } = require(root + "/src/expr");
+const { parseRpgle } = require(root + "/src/rpgle");
+const { parseDds } = require(root + "/src/dds");
+const { runProgram, compile, renderFormat } = require(root + "/src/interpreter");
+const C = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const val = (v) => typeof v === "boolean" ? { t: "b", v } : typeof v === "number" ? { t: "n", v } : { t: "s", v };
+const out = {};
+const ctx = { vars: { name: { type: "A", length: 20, dec: 0, value: "BOB".padEnd(20) }, other: { type: "A", length: 5, dec: 0, value: "BOB  " } }, indicators: { "03": true } };
+const safe = (f, onErr) => { try { return f(); } catch (e) { return onErr; } };
+out.exprs = C.exprs.map((e) => safe(() => { const v = evalExpr(e, ctx); return typeof v === "number" && !Number.isFinite(v) ? { error: true, nonfinite: true } : val(v); }, { error: true }));
+const dds1 = parseDds("     A          R MAIN\n     A            AMT            9  2O  1  1\n");
+out.render = C.render.map(([v, d, l]) => renderFormat(dds1.formats.MAIN, { amt: { type: "N", length: l, dec: d, value: v } }, {}).fields[0].text);
+const dline = (kw, name, length, dec) => "     D" + name.padEnd(17) + "S" + String(length).padStart(15) + (dec !== "" ? String(dec).padStart(3) : "   ") + " " + kw;
+out.dspecs = C.dspecs.map(([kw, name, length, dec]) => safe(() => { const d = parseRpgle(dline(kw, name, length, dec)).dspecs[0]; return { ok: [d.name, d.length, d.dec, d.init] }; }, { error: true }));
+out.specs = C.specs.map((s) => safe(() => { parseRpgle(s); return { ok: true }; }, { error: true }));
+const cs = (op) => "     C                   " + op.split(" ")[0].padEnd(10) + (op.includes(" ") ? op.split(" ").slice(1).join(" ") : "");
+out.compile = C.compile.map((lines) => safe(() => { compile(parseRpgle(lines.map(cs).join("\n")).statements); return { ok: true }; }, { error: true }));
+const DDS = "     A          R INQ                       CF03(03)\n     A            CUSTNO         5  0B  3 20\n";
+const PROG = "     FINQ       CF   E             WORKSTN\n     C                   EXFMT     INQ\n     C                   EXFMT     INQ\n";
+out.typed = C.typed.map((t) => safe(() => { const g = runProgram(parseRpgle(PROG), parseDds(DDS)); g.next(); const s = g.next({ key: "ENTER", values: { custno: t } }).value; return { ok: s.fields.filter((f) => f.input)[0].text }; }, { error: true }));
+out.assign = C.assign.map((a) => safe(() => { const g = runProgram(parseRpgle("     Dx                S              5  2\n     C                   EVAL      x = " + a + "\n     C                   EXFMT     X\n"), parseDds("     A          R X\n     A            X              5  2O  1  1\n")); return { ok: g.next().value.fields[0].text }; }, { error: true }));
+fs.writeFileSync(process.argv[3], JSON.stringify(out));

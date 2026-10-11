@@ -45,6 +45,24 @@ jobs:
       - run: python -m unittest discover -s tests -v
         working-directory: python
 
+  # The three ports must agree. This runs the same cases through Python, JS and
+  # Go and fails if any result differs (see "Checking port parity" in
+  # docs/PUBLISHING.md).
+  parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.21'
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - run: python3 tools/parity/check.py
+
   # Publishing is documented in docs/PUBLISHING.md but left commented out
   # here until NPM_TOKEN/PYPI_TOKEN is configured (Settings -> Secrets and
   # variables -> Actions) -- uncomment once you're ready to publish
