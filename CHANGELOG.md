@@ -8,7 +8,7 @@ A patch release (1.1.1) once published.
 
 ### Added
 
-- Two options on `run_program` for a host that runs other people's programs. `max_steps` caps how many instructions run between screens (the count restarts at each `EXFMT` and is shared with every program called), so a runaway `DOW` raises `RpgleError` instead of hanging the host. `system_programs` is a dict of upper-case program name to a hook that receives the argument values, so a host can answer `CALL 'QCMDEXC'` itself instead of looking for source. Both are off by default, and the `rpgle` command line does not use them. Built for Silverlake, an IBM i security range that embeds this runtime.
+- Two options on `run_program` for a host that runs other people's programs. `max_steps` caps how many instructions run between screens (the count restarts at each `EXFMT` and is shared with every program called), so a runaway `DOW` raises `RpgleError` instead of hanging the host. `system_programs` is a dict of upper-case program name to a hook that receives the argument values, so a host can answer `CALL 'QCMDEXC'` itself instead of looking for source. A host that keeps programs somewhere other than folders can subclass `ProgramLoader` and override `name_for(target)`, which turns a CALL's target into the key `load` is given (and that recursion is checked against), so it can resolve `LIB/NAME` against a library list. Both are off by default, and the `rpgle` command line does not use them. Built for Silverlake, an IBM i security range that embeds this runtime.
 
 ### Fixed
 

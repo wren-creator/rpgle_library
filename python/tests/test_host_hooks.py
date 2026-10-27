@@ -83,3 +83,25 @@ class SystemProgramTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NameForTest(unittest.TestCase):
+    def test_a_host_loader_resolves_the_target_before_recursion_and_load_see_it(self):
+        from rpgle import LoadedProgram, ProgramLoader
+
+        seen = []
+
+        class Host(ProgramLoader):
+            def name_for(self, target):
+                seen.append(("name_for", target.strip("'")))
+                return "LIB/" + target.strip("'").split("/")[-1].upper()
+
+            def load(self, key, caller_dir=None):
+                seen.append(("load", key))
+                return LoadedProgram(key, __import__("pathlib").Path("/x/y.pgm"),
+                                     parse_rpgle(src(dspec("N", 5, 0), cspec("EVAL", factor2="n = 1"))),
+                                     parse_dds(""), {})
+
+        caller = src(cspec("CALL", factor2="'other'"))
+        run_all(caller, loader=Host(dirs=[]))
+        self.assertEqual(seen, [("name_for", "other"), ("load", "LIB/OTHER")])

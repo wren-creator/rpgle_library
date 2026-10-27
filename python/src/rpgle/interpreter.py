@@ -1082,7 +1082,7 @@ class _Runtime:
                 return False
         if calls is None or calls.loader is None:
             raise CallError("CALL needs a program loader: pass loader=ProgramLoader(...) to run_program, or use the rpgle command")
-        key = program_key(target)
+        key = calls.loader.name_for(target)
         if key in calls.active:
             raise CallError(f"{key} is already running: an RPG program can't call itself, directly or through another program")
         loaded = calls.loader.load(key, self.directory)
