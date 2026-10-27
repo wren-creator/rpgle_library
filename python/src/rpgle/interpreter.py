@@ -937,6 +937,10 @@ class _Calls:
         # Programs currently running, outermost first. RPG programs can't
         # call themselves, directly or through another program.
         self.active: list[str] = [loader.main_name] if loader is not None and loader.main_name else []
+        # The same list, shown to the host as loader.active, so a hook or a loader can
+        # tell who is on the stack when it is asked something (adopted authority needs it).
+        if loader is not None:
+            loader.active = self.active
         # Programs that ended with *INLR off. Like the real thing they stay
         # active: variables, file positions and indicators survive to the next call.
         self.retained: dict[str, "_Instance"] = {}

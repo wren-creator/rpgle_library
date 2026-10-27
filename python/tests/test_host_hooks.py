@@ -105,3 +105,20 @@ class NameForTest(unittest.TestCase):
         caller = src(cspec("CALL", factor2="'other'"))
         run_all(caller, loader=Host(dirs=[]))
         self.assertEqual(seen, [("name_for", "other"), ("load", "LIB/OTHER")])
+
+
+class StackTest(unittest.TestCase):
+    def test_a_hook_can_see_who_is_on_the_stack_through_the_loader(self):
+        from rpgle import ProgramLoader
+        loader = ProgramLoader(dirs=[], main=None)
+        loader.main_name = "OUTER"
+        seen = []
+        caller = src(
+            dspec("CMD", 20),
+            dspec("LEN", 15, 5),
+            cspec("CALL", factor2="'QCMDEXC'"),
+            cspec("PARM", result="CMD"),
+            cspec("PARM", result="LEN"),
+        )
+        run_all(caller, loader=loader, system_programs={"QCMDEXC": lambda a: seen.append(list(loader.active))})
+        self.assertEqual(seen, [["OUTER"]])

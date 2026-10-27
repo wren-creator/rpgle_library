@@ -124,6 +124,7 @@ class ProgramLoader:
             except CallError:
                 pass
         self._cache: dict[Path, LoadedProgram] = {}
+        self.active: list[str] = []     # the running programs, outermost first, once a run has started
 
     def name_for(self, target: str) -> str:
         """The name a CALL's target goes by: the key `load` is given, and the one recursion is checked
