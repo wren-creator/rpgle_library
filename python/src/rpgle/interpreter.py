@@ -46,7 +46,7 @@ import re
 from collections import ChainMap
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import Any, Generator, Optional
+from typing import Any, Callable, Generator, Optional
 
 from .dds import DDS, Format
 from .errors import RpgleError
@@ -805,6 +805,8 @@ def run_program(
     pfs: Optional[dict[str, PhysicalFile]] = None,
     loader: Optional[ProgramLoader] = None,
     spool: Optional[Spool] = None,
+    max_steps: int = 0,
+    system_programs: Optional[dict[str, Callable[[list], None]]] = None,
 ) -> Generator[ScreenData, Optional[Resume], None]:
     """Runs the program. Yields a ScreenData on every EXFMT; resume
     with .send(Resume(key, values)) where key is whatever function key
@@ -820,9 +822,15 @@ def run_program(
     (loader.ProgramLoader), which finds them by name in its folders. A
     program that prints needs a spool (spool.Spool), which collects the
     output of every printer file; read it with spool.outputs().
+
+    A host that lets other people's programs run can pass max_steps, a cap
+    on instructions between screens (a runaway loop raises RpgleError
+    instead of hanging the host), and system_programs, a dict of upper-case
+    program name -> hook(list of argument values) for programs the host
+    answers itself, such as QCMDEXC.
     """
     try:
-        yield from _run_program(prog, dds, db, pfs, loader, spool)
+        yield from _run_program(prog, dds, db, pfs, loader, spool, max_steps, system_programs)
     finally:
         if db is not None:
             db.commit()
@@ -907,10 +915,25 @@ class _Frame:
 class _Calls:
     """State shared by a program and every program it calls, directly or not."""
 
-    def __init__(self, loader: Optional[ProgramLoader], db: Optional[Database], spool: Optional[Spool] = None):
+    def __init__(
+        self,
+        loader: Optional[ProgramLoader],
+        db: Optional[Database],
+        spool: Optional[Spool] = None,
+        max_steps: int = 0,
+        system_programs: Optional[dict[str, Callable[[list], None]]] = None,
+    ):
         self.loader = loader
         self.db = db
         self.spool = spool
+        # A host that runs other people's programs can cap how many instructions
+        # run between screens (0 = no cap); the count restarts at each EXFMT,
+        # and is shared by a program and everything it calls.
+        self.max_steps = max_steps
+        self.steps = 0
+        # Programs the host answers itself, by upper-case name: CALL 'QCMDEXC'
+        # runs hook([argument values]) instead of looking for source.
+        self.system_programs = {k.upper(): v for k, v in (system_programs or {}).items()}
         # Programs currently running, outermost first. RPG programs can't
         # call themselves, directly or through another program.
         self.active: list[str] = [loader.main_name] if loader is not None and loader.main_name else []
@@ -1052,6 +1075,11 @@ class _Runtime:
         program runs is the program's own, and propagates.
         """
         calls = self.calls
+        if calls is not None and calls.system_programs:
+            name = program_key(target)
+            if name in calls.system_programs:
+                calls.system_programs[name]([a[0] for a in args])
+                return False
         if calls is None or calls.loader is None:
             raise CallError("CALL needs a program loader: pass loader=ProgramLoader(...) to run_program, or use the rpgle command")
         key = program_key(target)
@@ -1109,9 +1137,15 @@ class _Runtime:
         pc = 0
         last_div_remainder = 0.0
 
+        calls = self.calls
         while pc < len(instrs):
             instr = instrs[pc]
             op = instr.op
+
+            if calls is not None and calls.max_steps:
+                calls.steps += 1
+                if calls.steps > calls.max_steps:
+                    raise RpgleError(f"program ran more than {calls.max_steps} instructions without showing a screen")
 
             if instr.cond is not None:
                 negated, num = instr.cond
@@ -1218,6 +1252,8 @@ class _Runtime:
                 # scoped to only the indicators this format's own CF/CA
                 # keywords own (real RPG behavior -- other formats' key
                 # indicators are untouched).
+                if calls is not None:
+                    calls.steps = 0
                 for num in fmt.keys.values():
                     indicators[num] = False
                 ind_for_key = fmt.keys.get(resume.key) if resume else None
@@ -1349,6 +1385,8 @@ def _run_program(
     pfs: Optional[dict[str, PhysicalFile]],
     loader: Optional[ProgramLoader] = None,
     spool: Optional[Spool] = None,
+    max_steps: int = 0,
+    system_programs: Optional[dict[str, Callable[[list], None]]] = None,
 ) -> Generator[ScreenData, Optional[Resume], None]:
     prtfs = spool.load_defs(prog) if spool is not None else {}
     variables = build_vars(prog, dds, pfs, prtfs)
@@ -1357,6 +1395,6 @@ def _run_program(
     files = FileRuntime(prog, db, pfs, compiled.klists, spool=spool, prtfs=prtfs)
     rt = _Runtime(
         prog, dds, pfs, variables, indicators, files, compile_procs(prog.procs),
-        calls=_Calls(loader, db, spool), directory=loader.dirs[0] if loader is not None and loader.dirs else None,
+        calls=_Calls(loader, db, spool, max_steps, system_programs), directory=loader.dirs[0] if loader is not None and loader.dirs else None,
     )
     yield from rt.exec(rt.main_frame(compiled))

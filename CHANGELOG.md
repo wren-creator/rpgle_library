@@ -6,6 +6,10 @@ Versions follow [`docs/PUBLISHING.md`](./docs/PUBLISHING.md). Everything below i
 
 A patch release (1.1.1) once published.
 
+### Added
+
+- Two options on `run_program` for a host that runs other people's programs. `max_steps` caps how many instructions run between screens (the count restarts at each `EXFMT` and is shared with every program called), so a runaway `DOW` raises `RpgleError` instead of hanging the host. `system_programs` is a dict of upper-case program name to a hook that receives the argument values, so a host can answer `CALL 'QCMDEXC'` itself instead of looking for source. Both are off by default, and the `rpgle` command line does not use them. Built for Silverlake, an IBM i security range that embeds this runtime.
+
 ### Fixed
 
 - A key or record value for a `DISK` file follows the same rule as typing into a number field. Text that isn't a number (`'abc'`) used to escape as a raw `ValueError` instead of a clean error, and a blank number key crashed the same way; a blank now reads as zero. A number used as a character key reads the way RPG shows it, so `CHAIN 20` finds the key `20`, not `20.0`.
