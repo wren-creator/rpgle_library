@@ -1357,6 +1357,7 @@ def _param_for(name: str, variables: dict[str, Any]) -> ParamSpec:
 def _new_instance(loaded: LoadedProgram, calls: _Calls) -> _Instance:
     """Builds a program ready to run: its variables, files and procedures."""
     prog = loaded.prog
+    calls.active.append(loaded.key)         # a host asked something while the files open sees this program on the stack
     try:
         prtfs = calls.spool.load_defs(prog, [loaded.path.parent]) if calls.spool is not None else {}
         variables = build_vars(prog, loaded.dds, loaded.pfs, prtfs)
@@ -1369,6 +1370,8 @@ def _new_instance(loaded: LoadedProgram, calls: _Calls) -> _Instance:
         )
     except RpgleError as e:
         raise RpgleError(f"{loaded.key}: {e}") from None
+    finally:
+        calls.active.pop()
     return _Instance(rt=rt, compiled=compiled, loaded=loaded)
 
 
@@ -1396,9 +1399,10 @@ def _run_program(
     variables = build_vars(prog, dds, pfs, prtfs)
     indicators: dict[str, bool] = {}
     compiled = compile_program(prog.statements)
+    calls = _Calls(loader, db, spool, max_steps, system_programs)     # first: its stack is there when the files open
     files = FileRuntime(prog, db, pfs, compiled.klists, spool=spool, prtfs=prtfs)
     rt = _Runtime(
         prog, dds, pfs, variables, indicators, files, compile_procs(prog.procs),
-        calls=_Calls(loader, db, spool, max_steps, system_programs), directory=loader.dirs[0] if loader is not None and loader.dirs else None,
+        calls=calls, directory=loader.dirs[0] if loader is not None and loader.dirs else None,
     )
     yield from rt.exec(rt.main_frame(compiled))
