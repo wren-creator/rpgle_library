@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import math
 import sqlite3
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from .errors import RpgleError
 from .expr import as_float, as_string
@@ -77,9 +77,11 @@ def _to_db(f: PfField, value: Any) -> Any:
 class FileHandle:
     """One open DISK file."""
 
-    def __init__(self, conn: sqlite3.Connection, pf: PhysicalFile):
+    def __init__(self, conn: sqlite3.Connection, pf: PhysicalFile,
+                 authorize: Optional[Callable[[str, str], None]] = None):
         self._conn = conn
         self.pf = pf
+        self._authorize = authorize
         self._table = _q(pf.name)
         self._cols = [f.name for f in pf.fields]
         self._field = {f.name: f for f in pf.fields}
@@ -90,6 +92,11 @@ class FileHandle:
         self.found = False
         self.eof = False
         self.equal = False
+
+    def _check(self, op: str) -> None:
+        """Ask the host whether an operation ("read", "add", "update", "delete") is allowed."""
+        if self._authorize is not None:
+            self._authorize(self.pf.name, op)
 
     # ── key handling ─────────────────────────────────────────────
 
@@ -169,18 +176,23 @@ class FileHandle:
         return rec
 
     def read(self) -> Optional[dict]:
+        self._check("read")
         return self._step(True)
 
     def readp(self) -> Optional[dict]:
+        self._check("read")
         return self._step(False)
 
     def reade(self, key: tuple) -> Optional[dict]:
+        self._check("read")
         return self._step(True, self._coerce_key(key))
 
     def readpe(self, key: tuple) -> Optional[dict]:
+        self._check("read")
         return self._step(False, self._coerce_key(key))
 
     def chain(self, key: tuple) -> Optional[dict]:
+        self._check("read")
         k = self._coerce_key(key)
         where = " AND ".join(f"{_q(c)} = ?" for c in self.key_cols[: len(k)]) or "1"
         row = self._select(where, list(k), True)
@@ -234,6 +246,7 @@ class FileHandle:
         return [_to_db(self._field[c], record[c]) for c in self._cols]
 
     def write(self, record: dict) -> None:
+        self._check("add")
         cols = ", ".join(_q(c) for c in self._cols)
         marks = ", ".join("?" for _ in self._cols)
         try:
@@ -242,6 +255,7 @@ class FileHandle:
             raise RpgleError(f"{self.pf.name}: duplicate key") from None
 
     def update(self, record: dict) -> None:
+        self._check("update")
         if self._current is None:
             raise RpgleError(f"{self.pf.name}: UPDATE with no current record (read or chain one first)")
         sets = ", ".join(f"{_q(c)} = ?" for c in self._cols)
@@ -263,6 +277,7 @@ class FileHandle:
         """Deletes the record with the given key (first match), or the
         current record when key is None. Returns whether one was deleted.
         """
+        self._check("delete")
         if key is None:
             if self._current is None:
                 raise RpgleError(f"{self.pf.name}: DELETE with no current record (read or chain one first)")
@@ -287,16 +302,22 @@ class Database:
     default) is private to this process and vanishes on close.
     """
 
-    def __init__(self, path: str = ":memory:"):
+    def __init__(self, path: str = ":memory:", authorize: Optional[Callable[[str, str], None]] = None):
+        # authorize(file name, operation) is a host's chance to refuse: it is asked at open
+        # ("open:I", "open:U", "open:O", "open:C", the F-spec's usage) and before every
+        # "read", "add", "update" and "delete", and refuses by raising RpgleError.
+        self._authorize = authorize
         self._conn = sqlite3.connect(path)
         self._conn.row_factory = sqlite3.Row
         self._handles: dict[str, FileHandle] = {}
 
-    def open_file(self, pf: PhysicalFile) -> FileHandle:
+    def open_file(self, pf: PhysicalFile, mode: str = "I") -> FileHandle:
         """Creates the file's table if it doesn't exist, and returns a
         handle. Opening an existing table checks the columns match, so
         a changed DDS fails loudly instead of corrupting data.
         """
+        if self._authorize is not None:
+            self._authorize(pf.name, "open:" + (mode or "I").upper())
         table = _q(pf.name)
         defs = []
         for f in pf.fields:
@@ -314,9 +335,28 @@ class Database:
             idx = _q(f"{pf.name}_KEY")
             cols = ", ".join(_q(k) for k in pf.keys)
             self._conn.execute(f"CREATE {'UNIQUE ' if pf.unique else ''}INDEX IF NOT EXISTS {idx} ON {table} ({cols})")
-        h = FileHandle(self._conn, pf)
+        h = FileHandle(self._conn, pf, self._authorize)
         self._handles[pf.name] = h
         return h
+
+    def load_rows(self, pf: PhysicalFile, records: list[dict]) -> None:
+        """Replace a file's records with these (creating its table first). For a host that keeps the
+        data somewhere else and wants a run to start from it. Not checked by `authorize`."""
+        saved, self._authorize = self._authorize, None
+        try:
+            h = self.open_file(pf)
+        finally:
+            self._authorize = saved
+        self._conn.execute(f"DELETE FROM {_q(pf.name)}")
+        for rec in records:
+            h.write({c: rec.get(c, "" if pf.field_named(c).dtype == "A" else 0) for c in h._cols})
+        h._authorize = saved
+
+    def dump_rows(self, name: str) -> list[dict]:
+        """A file's records in arrival order, as plain dicts, for a host to keep."""
+        h = self._handles[name.upper()]
+        cur = self._conn.execute(f"SELECT * FROM {h._table} ORDER BY {_q(_RRN)}")
+        return [{c: row[c] for c in h._cols} for row in cur]
 
     def file(self, name: str) -> FileHandle:
         try:

@@ -107,7 +107,7 @@ class FileRuntime:
             pf = (pfs or {}).get(name)
             if pf is None:
                 raise RpgleError(f"{name}: no physical file DDS was provided")
-            self._files[name] = db.open_file(pf)  # type: ignore[union-attr]
+            self._files[name] = db.open_file(pf, fs.type or "I")  # type: ignore[union-attr]
             self._by_format[pf.format] = name
 
     # ── name and key resolution ──────────────────────────────────

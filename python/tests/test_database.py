@@ -275,5 +275,44 @@ class DatabaseTest(unittest.TestCase):
             db.file("NOPE")
 
 
+
+class HostHooksTest(unittest.TestCase):
+    """What a host that keeps the data and the rules itself needs: ask before every operation, and
+    load and dump rows without going through the program."""
+
+    def test_authorize_is_asked_at_open_and_for_each_operation(self):
+        asked = []
+        db = Database(authorize=lambda name, op: asked.append((name, op)))
+        self.addCleanup(db.close)
+        f = db.open_file(CUST, "U")
+        f.write(cust(1, "A"))
+        f.chain((1,))
+        f.update(cust(1, "B"))
+        f.delete()
+        self.assertEqual([op for _, op in asked], ["open:U", "add", "read", "update", "delete"])
+        self.assertEqual({n for n, _ in asked}, {"CUSTMAST"})
+
+    def test_authorize_can_refuse_and_nothing_is_changed(self):
+        def deny_add(name, op):
+            if op == "add":
+                raise RpgleError("Not authorized")
+        db = Database(authorize=deny_add)
+        self.addCleanup(db.close)
+        f = db.open_file(CUST)
+        with self.assertRaises(RpgleError):
+            f.write(cust(1, "A"))
+        self.assertEqual(db.dump_rows("CUSTMAST"), [])
+
+    def test_load_and_dump_round_trip_without_asking(self):
+        asked = []
+        db = Database(authorize=lambda name, op: asked.append(op))
+        self.addCleanup(db.close)
+        db.load_rows(CUST, [cust(2, "BOB", 5.5), cust(1, "ALICE")])
+        self.assertEqual(asked, [])
+        self.assertEqual([r["NAME"].strip() for r in db.dump_rows("custmast")], ["BOB", "ALICE"])
+        f = db.open_file(CUST)                       # a program opening it later sees the rows, in key order
+        self.assertEqual(f.read()["NAME"].strip(), "ALICE")
+        self.assertEqual(asked, ["open:I", "read"])
+
 if __name__ == "__main__":
     unittest.main()
