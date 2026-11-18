@@ -322,6 +322,69 @@ class HostHooksTest(unittest.TestCase):
         self.assertEqual(asked, ["open:I", "read"])
 
 
+class RecordLockingTest(unittest.TestCase):
+    """lock/unlock are asked only for a file opened U or C, once per record a positioned read lands
+    on, and let go on UPDATE, DELETE, or moving to a different record."""
+
+    def setUp(self):
+        self.held: set = set()
+
+        def lock(name, rrn):
+            key = (name, rrn)
+            if key in self.held:
+                return False
+            self.held.add(key)
+            return True
+
+        def unlock(name, rrn):
+            self.held.discard((name, rrn))
+
+        self.db = Database(lock=lock, unlock=unlock)
+        self.addCleanup(self.db.close)
+        self.f = self.db.open_file(CUST, "U")
+        self.f.write(cust(1, "ALICE"))
+        self.f.write(cust(2, "BOB"))
+
+    def test_a_read_only_open_never_locks(self):
+        db2 = Database(lock=lambda *a: self.fail("should not be asked"))
+        self.addCleanup(db2.close)
+        db2.open_file(CUST).chain((1,))
+
+    def test_chain_locks_the_record_and_update_releases_it(self):
+        self.f.chain((1,))
+        self.assertEqual(self.held, {("CUSTMAST", 1)})
+        self.f.update(cust(1, "ALICE2"))
+        self.assertEqual(self.held, set())
+
+    def test_delete_releases_the_lock(self):
+        self.f.chain((2,))
+        self.f.delete()
+        self.assertEqual(self.held, set())
+
+    def test_moving_to_another_record_releases_the_one_before_it(self):
+        self.f.chain((1,))
+        self.f.chain((2,))
+        self.assertEqual(self.held, {("CUSTMAST", 2)})
+
+    def test_a_record_already_locked_refuses_and_leaves_the_file_positioned(self):
+        self.held.add(("CUSTMAST", 2))
+        with self.assertRaises(RpgleError):
+            self.f.chain((2,))
+
+    def test_two_handles_on_the_same_table_contend_for_the_same_lock(self):
+        """A logical file opens the same table under its own name, so it has to lock by the physical
+        file's name, not whatever name it was opened under, or two views of one record could both
+        grab it."""
+        g = self.db.open_logical(
+            parse_lf("custbyname", dds(dds_line(keywords="PFILE(CUSTMAST)"), dds_line("R", "CUSTREC"),
+                                       dds_line("K", "NAME")), CUST),
+            CUST, "U",
+        )
+        self.f.chain((1,))                            # customer 1 is ALICE
+        with self.assertRaises(RpgleError):
+            g.chain(("ALICE",))
+
+
 class LogicalFileTest(unittest.TestCase):
     """A logical file shares the physical file's table but reads it in its own key order,
     through its own name, with its own independent position."""

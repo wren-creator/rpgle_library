@@ -84,7 +84,9 @@ class FileHandle:
 
     def __init__(self, conn: sqlite3.Connection, pf: PhysicalFile,
                  authorize: Optional[Callable[[str, str], None]] = None,
-                 open_name: Optional[str] = None, key_cols: Optional[list[str]] = None):
+                 open_name: Optional[str] = None, key_cols: Optional[list[str]] = None,
+                 mode: str = "I", lock: Optional[Callable[[str, int], bool]] = None,
+                 unlock: Optional[Callable[[str, int], None]] = None):
         self._conn = conn
         self.pf = pf
         self._authorize = authorize
@@ -101,11 +103,38 @@ class FileHandle:
         self.found = False
         self.eof = False
         self.equal = False
+        # Record-level locking: a positioned read in U or C mode locks the record it lands on, by the
+        # physical file's own name (two names open on one table, see open_logical, contend for the
+        # same lock) and rrn, until the record moves, is written, or the job ends. lock(name, rrn)
+        # returns whether the lock was granted; the host decides who already holds it.
+        self.mode = (mode or "I").upper()
+        self._lock = lock
+        self._unlock = unlock
+        self._locked_rrn: Optional[int] = None
 
     def _check(self, op: str) -> None:
         """Ask the host whether an operation ("read", "add", "update", "delete") is allowed."""
         if self._authorize is not None:
             self._authorize(self._name, op)
+
+    def _acquire(self, rrn: int) -> None:
+        if self.mode not in ("U", "C") or self._lock is None:
+            return
+        self._release()
+        if not self._lock(self.pf.name, rrn):
+            raise RpgleError(f"{self._name}: record is locked by another job")
+        self._locked_rrn = rrn
+
+    def _release(self) -> None:
+        if self._locked_rrn is not None:
+            if self._unlock is not None:
+                self._unlock(self.pf.name, self._locked_rrn)
+            self._locked_rrn = None
+
+    def release(self) -> None:
+        """Give up whatever record this handle has locked, without otherwise disturbing it. For a
+        host to call when a job signs off or a USROPN file is closed."""
+        self._release()
 
     # ── key handling ─────────────────────────────────────────────
 
@@ -166,6 +195,7 @@ class FileHandle:
         self._pos = ("rec", key, row[_RRN])
         self._current = row[_RRN]
         self.eof = False
+        self._acquire(row[_RRN])
         return rec
 
     def _step(self, forward: bool, match: Optional[tuple] = None) -> Optional[dict]:
@@ -281,6 +311,7 @@ class FileHandle:
             f"SELECT * FROM {self._table} WHERE {_q(_RRN)} = ?", [self._current]
         ).fetchone()
         self._pos = ("rec", self._record_key({c: row[c] for c in self.key_cols}), self._current)
+        self._release()
 
     def delete(self, key: Optional[tuple] = None) -> bool:
         """Deletes the record with the given key (first match), or the
@@ -303,6 +334,7 @@ class FileHandle:
         self.found = cur.rowcount > 0
         if rrn == self._current:
             self._current = None
+            self._release()
         return self.found
 
 
@@ -311,11 +343,17 @@ class Database:
     default) is private to this process and vanishes on close.
     """
 
-    def __init__(self, path: str = ":memory:", authorize: Optional[Callable[[str, str], None]] = None):
+    def __init__(self, path: str = ":memory:", authorize: Optional[Callable[[str, str], None]] = None,
+                 lock: Optional[Callable[[str, int], bool]] = None,
+                 unlock: Optional[Callable[[str, int], None]] = None):
         # authorize(file name, operation) is a host's chance to refuse: it is asked at open
         # ("open:I", "open:U", "open:O", "open:C", the F-spec's usage) and before every
         # "read", "add", "update" and "delete", and refuses by raising RpgleError.
+        # lock(physical file name, rrn) / unlock(...) are a host's record-level locking, asked only
+        # for files opened U or C: see FileHandle._acquire.
         self._authorize = authorize
+        self._lock = lock
+        self._unlock = unlock
         self._conn = sqlite3.connect(path)
         self._conn.row_factory = sqlite3.Row
         self._handles: dict[str, FileHandle] = {}
@@ -347,7 +385,7 @@ class Database:
             cols = ", ".join(_q(k) for k in pf.keys)
             self._conn.execute(f"CREATE {'UNIQUE ' if pf.unique else ''}INDEX IF NOT EXISTS {idx} ON "
                                f"{_q(pf.name)} ({cols})")
-        h = FileHandle(self._conn, pf, self._authorize)
+        h = FileHandle(self._conn, pf, self._authorize, mode=mode, lock=self._lock, unlock=self._unlock)
         self._handles[pf.name] = h
         return h
 
@@ -366,7 +404,8 @@ class Database:
         cols = ", ".join(_q(k) for k in lf.keys)
         self._conn.execute(f"CREATE {'UNIQUE ' if lf.unique else ''}INDEX IF NOT EXISTS {idx} ON "
                            f"{_q(pf.name)} ({cols})")
-        h = FileHandle(self._conn, pf, self._authorize, open_name=lf.name, key_cols=list(lf.keys))
+        h = FileHandle(self._conn, pf, self._authorize, open_name=lf.name, key_cols=list(lf.keys),
+                       mode=mode, lock=self._lock, unlock=self._unlock)
         self._handles[lf.name] = h
         return h
 
