@@ -124,6 +124,13 @@ class ProgramLoader:
             except CallError:
                 pass
         self._cache: dict[Path, LoadedProgram] = {}
+        self.active: list[str] = []     # the running programs, outermost first, once a run has started
+
+    def name_for(self, target: str) -> str:
+        """The name a CALL's target goes by: the key `load` is given, and the one recursion is checked
+        against. Here it is the bare program name (a library prefix means nothing in a folder). A host
+        that keeps programs in libraries overrides this to resolve the target to 'LIB/NAME'."""
+        return program_key(target)
 
     def find(self, key: str, caller_dir: Optional[Path]) -> Path:
         search = [d for d in ([caller_dir] if caller_dir else []) + self.dirs]

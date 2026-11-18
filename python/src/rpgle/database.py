@@ -30,6 +30,10 @@ keys in arrival order and is the key for files with no K lines.
 
 Errors raise RpgleError; the interpreter turns that into the error
 indicator when the program asked for one.
+
+A logical file (see lf.py) opens the same table under open_logical,
+with its own key order and its own name for authority and error
+messages, instead of a table of its own.
 ─────────────────────────────────────────────────────────────────
 """
 
@@ -37,10 +41,11 @@ from __future__ import annotations
 
 import math
 import sqlite3
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from .errors import RpgleError
 from .expr import as_float, as_string
+from .lf import LogicalFile
 from .pf import PfField, PhysicalFile
 
 _RRN = "_rrn"
@@ -77,19 +82,30 @@ def _to_db(f: PfField, value: Any) -> Any:
 class FileHandle:
     """One open DISK file."""
 
-    def __init__(self, conn: sqlite3.Connection, pf: PhysicalFile):
+    def __init__(self, conn: sqlite3.Connection, pf: PhysicalFile,
+                 authorize: Optional[Callable[[str, str], None]] = None,
+                 open_name: Optional[str] = None, key_cols: Optional[list[str]] = None):
         self._conn = conn
         self.pf = pf
+        self._authorize = authorize
+        # The name authority and errors are reported against: the physical file itself when
+        # opened directly, or a logical file's own name when opened through one (see open_logical).
+        self._name = (open_name or pf.name).upper()
         self._table = _q(pf.name)
         self._cols = [f.name for f in pf.fields]
         self._field = {f.name: f for f in pf.fields}
         # Arrival-sequence files are "keyed" by relative record number.
-        self.key_cols = list(pf.keys) if pf.keys else [_RRN]
+        self.key_cols = list(key_cols) if key_cols is not None else (list(pf.keys) if pf.keys else [_RRN])
         self._pos: tuple = ("setll", ())
         self._current: Optional[int] = None  # rrn of the record last read/chained
         self.found = False
         self.eof = False
         self.equal = False
+
+    def _check(self, op: str) -> None:
+        """Ask the host whether an operation ("read", "add", "update", "delete") is allowed."""
+        if self._authorize is not None:
+            self._authorize(self._name, op)
 
     # ── key handling ─────────────────────────────────────────────
 
@@ -98,7 +114,7 @@ class FileHandle:
 
     def _coerce_key(self, values: tuple) -> tuple:
         if len(values) > len(self.key_cols):
-            raise RpgleError(f"{self.pf.name}: key has {len(values)} fields, file has {len(self.key_cols)}")
+            raise RpgleError(f"{self._name}: key has {len(values)} fields, file has {len(self.key_cols)}")
         out = []
         for col, v in zip(self.key_cols, values):
             f = self._key_field(col)
@@ -169,18 +185,23 @@ class FileHandle:
         return rec
 
     def read(self) -> Optional[dict]:
+        self._check("read")
         return self._step(True)
 
     def readp(self) -> Optional[dict]:
+        self._check("read")
         return self._step(False)
 
     def reade(self, key: tuple) -> Optional[dict]:
+        self._check("read")
         return self._step(True, self._coerce_key(key))
 
     def readpe(self, key: tuple) -> Optional[dict]:
+        self._check("read")
         return self._step(False, self._coerce_key(key))
 
     def chain(self, key: tuple) -> Optional[dict]:
+        self._check("read")
         k = self._coerce_key(key)
         where = " AND ".join(f"{_q(c)} = ?" for c in self.key_cols[: len(k)]) or "1"
         row = self._select(where, list(k), True)
@@ -230,29 +251,31 @@ class FileHandle:
     def _values(self, record: dict) -> list:
         missing = [c for c in self._cols if c not in record]
         if missing:
-            raise RpgleError(f"{self.pf.name}: record is missing fields {missing}")
+            raise RpgleError(f"{self._name}: record is missing fields {missing}")
         return [_to_db(self._field[c], record[c]) for c in self._cols]
 
     def write(self, record: dict) -> None:
+        self._check("add")
         cols = ", ".join(_q(c) for c in self._cols)
         marks = ", ".join("?" for _ in self._cols)
         try:
             self._conn.execute(f"INSERT INTO {self._table} ({cols}) VALUES ({marks})", self._values(record))
         except sqlite3.IntegrityError:
-            raise RpgleError(f"{self.pf.name}: duplicate key") from None
+            raise RpgleError(f"{self._name}: duplicate key") from None
 
     def update(self, record: dict) -> None:
+        self._check("update")
         if self._current is None:
-            raise RpgleError(f"{self.pf.name}: UPDATE with no current record (read or chain one first)")
+            raise RpgleError(f"{self._name}: UPDATE with no current record (read or chain one first)")
         sets = ", ".join(f"{_q(c)} = ?" for c in self._cols)
         try:
             cur = self._conn.execute(
                 f"UPDATE {self._table} SET {sets} WHERE {_q(_RRN)} = ?", [*self._values(record), self._current]
             )
         except sqlite3.IntegrityError:
-            raise RpgleError(f"{self.pf.name}: duplicate key") from None
+            raise RpgleError(f"{self._name}: duplicate key") from None
         if cur.rowcount == 0:
-            raise RpgleError(f"{self.pf.name}: the current record no longer exists")
+            raise RpgleError(f"{self._name}: the current record no longer exists")
         # The key may have changed; keep the position on this record.
         row = self._conn.execute(
             f"SELECT * FROM {self._table} WHERE {_q(_RRN)} = ?", [self._current]
@@ -263,9 +286,10 @@ class FileHandle:
         """Deletes the record with the given key (first match), or the
         current record when key is None. Returns whether one was deleted.
         """
+        self._check("delete")
         if key is None:
             if self._current is None:
-                raise RpgleError(f"{self.pf.name}: DELETE with no current record (read or chain one first)")
+                raise RpgleError(f"{self._name}: DELETE with no current record (read or chain one first)")
             rrn = self._current
         else:
             k = self._coerce_key(key)
@@ -287,16 +311,18 @@ class Database:
     default) is private to this process and vanishes on close.
     """
 
-    def __init__(self, path: str = ":memory:"):
+    def __init__(self, path: str = ":memory:", authorize: Optional[Callable[[str, str], None]] = None):
+        # authorize(file name, operation) is a host's chance to refuse: it is asked at open
+        # ("open:I", "open:U", "open:O", "open:C", the F-spec's usage) and before every
+        # "read", "add", "update" and "delete", and refuses by raising RpgleError.
+        self._authorize = authorize
         self._conn = sqlite3.connect(path)
         self._conn.row_factory = sqlite3.Row
         self._handles: dict[str, FileHandle] = {}
 
-    def open_file(self, pf: PhysicalFile) -> FileHandle:
-        """Creates the file's table if it doesn't exist, and returns a
-        handle. Opening an existing table checks the columns match, so
-        a changed DDS fails loudly instead of corrupting data.
-        """
+    def _create_table(self, pf: PhysicalFile) -> None:
+        """Creates the physical file's table if it doesn't exist. Opening an existing table checks
+        the columns match, so a changed DDS fails loudly instead of corrupting data."""
         table = _q(pf.name)
         defs = []
         for f in pf.fields:
@@ -310,13 +336,58 @@ class Database:
             raise RpgleError(
                 f"{pf.name}: table columns {existing[1:]} don't match the DDS fields {[f.name for f in pf.fields]}"
             )
+
+    def open_file(self, pf: PhysicalFile, mode: str = "I") -> FileHandle:
+        """Creates the file's table if it doesn't exist, and returns a handle."""
+        if self._authorize is not None:
+            self._authorize(pf.name, "open:" + (mode or "I").upper())
+        self._create_table(pf)
         if pf.keys:
             idx = _q(f"{pf.name}_KEY")
             cols = ", ".join(_q(k) for k in pf.keys)
-            self._conn.execute(f"CREATE {'UNIQUE ' if pf.unique else ''}INDEX IF NOT EXISTS {idx} ON {table} ({cols})")
-        h = FileHandle(self._conn, pf)
+            self._conn.execute(f"CREATE {'UNIQUE ' if pf.unique else ''}INDEX IF NOT EXISTS {idx} ON "
+                               f"{_q(pf.name)} ({cols})")
+        h = FileHandle(self._conn, pf, self._authorize)
         self._handles[pf.name] = h
         return h
+
+    def open_logical(self, lf: LogicalFile, pf: PhysicalFile, mode: str = "I") -> FileHandle:
+        """Opens a logical file: the physical file's own table (created if it doesn't exist yet),
+        indexed and read in the logical file's own key order instead of the physical file's. Two
+        handles can be open on the same table at once, one through each name, with independent
+        positions, the same as a real system's two file pointers over one set of records.
+        """
+        if lf.based_on != pf.name:
+            raise RpgleError(f"{lf.name}: PFILE({lf.based_on}) does not match physical file {pf.name}")
+        if self._authorize is not None:
+            self._authorize(lf.name, "open:" + (mode or "I").upper())
+        self._create_table(pf)
+        idx = _q(f"{lf.name}_KEY")
+        cols = ", ".join(_q(k) for k in lf.keys)
+        self._conn.execute(f"CREATE {'UNIQUE ' if lf.unique else ''}INDEX IF NOT EXISTS {idx} ON "
+                           f"{_q(pf.name)} ({cols})")
+        h = FileHandle(self._conn, pf, self._authorize, open_name=lf.name, key_cols=list(lf.keys))
+        self._handles[lf.name] = h
+        return h
+
+    def load_rows(self, pf: PhysicalFile, records: list[dict]) -> None:
+        """Replace a file's records with these (creating its table first). For a host that keeps the
+        data somewhere else and wants a run to start from it. Not checked by `authorize`."""
+        saved, self._authorize = self._authorize, None
+        try:
+            h = self.open_file(pf)
+        finally:
+            self._authorize = saved
+        self._conn.execute(f"DELETE FROM {_q(pf.name)}")
+        for rec in records:
+            h.write({c: rec.get(c, "" if pf.field_named(c).dtype == "A" else 0) for c in h._cols})
+        h._authorize = saved
+
+    def dump_rows(self, name: str) -> list[dict]:
+        """A file's records in arrival order, as plain dicts, for a host to keep."""
+        h = self._handles[name.upper()]
+        cur = self._conn.execute(f"SELECT * FROM {h._table} ORDER BY {_q(_RRN)}")
+        return [{c: row[c] for c in h._cols} for row in cur]
 
     def file(self, name: str) -> FileHandle:
         try:

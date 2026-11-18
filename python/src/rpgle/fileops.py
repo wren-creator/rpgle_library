@@ -31,6 +31,7 @@ from typing import Any, Callable, Optional
 from .database import Database, FileHandle
 from .errors import RpgleError
 from .expr import split_top
+from .lf import LogicalFile
 from .pf import PhysicalFile
 from .prtf import PrintFile
 from .rpgle import Program
@@ -67,7 +68,7 @@ class FileRuntime:
         self,
         prog: Program,
         db: Optional[Database],
-        pfs: Optional[dict[str, PhysicalFile]],
+        pfs: Optional[dict[str, "PhysicalFile | LogicalFile"]],
         klists: dict[str, list[str]],
         spool: Optional[Spool] = None,
         prtfs: Optional[dict[str, PrintFile]] = None,
@@ -104,11 +105,18 @@ class FileRuntime:
             name = fs.name.upper()
             if (fs.format or "").upper() != "E":
                 raise RpgleError(f"{name}: only externally described DISK files (F-spec column 22 = E) are supported")
-            pf = (pfs or {}).get(name)
-            if pf is None:
+            layout = (pfs or {}).get(name)
+            if layout is None:
                 raise RpgleError(f"{name}: no physical file DDS was provided")
-            self._files[name] = db.open_file(pf)  # type: ignore[union-attr]
-            self._by_format[pf.format] = name
+            if isinstance(layout, LogicalFile):
+                base = (pfs or {}).get(layout.based_on)
+                if base is None:
+                    raise RpgleError(f"{name}: physical file {layout.based_on} for this logical file "
+                                     "was not provided")
+                self._files[name] = db.open_logical(layout, base, fs.type or "I")  # type: ignore[union-attr]
+            else:
+                self._files[name] = db.open_file(layout, fs.type or "I")  # type: ignore[union-attr]
+            self._by_format[layout.format] = name
 
     # ── name and key resolution ──────────────────────────────────
 
