@@ -2,6 +2,7 @@ import unittest
 
 from rpgle import RpgleError
 from rpgle.database import Database
+from rpgle.lf import LogicalFile, parse_lf
 from rpgle.pf import parse_pf
 
 from _cols import dds, dds_line
@@ -32,6 +33,12 @@ ORDERS = parse_pf(
 )
 
 LOG = parse_pf("LOG", dds(dds_line("R", "LOGREC"), dds_line("", "MSG", 10)))
+
+CUST_BY_NAME = parse_lf(
+    "custbyname",
+    dds(dds_line(keywords="PFILE(CUSTMAST)"), dds_line("R", "CUSTREC"), dds_line("K", "NAME")),
+    CUST,
+)
 
 
 def cust(no, name, bal=0.0):
@@ -313,6 +320,68 @@ class HostHooksTest(unittest.TestCase):
         f = db.open_file(CUST)                       # a program opening it later sees the rows, in key order
         self.assertEqual(f.read()["NAME"].strip(), "ALICE")
         self.assertEqual(asked, ["open:I", "read"])
+
+
+class LogicalFileTest(unittest.TestCase):
+    """A logical file shares the physical file's table but reads it in its own key order,
+    through its own name, with its own independent position."""
+
+    def setUp(self):
+        self.db = Database()
+        self.addCleanup(self.db.close)
+        self.pf = self.db.open_file(CUST)
+        # CUSTNO order and NAME order disagree on purpose, so a test that gets the same
+        # answer from both couldn't be fooled into passing by accident.
+        for no, name in [(30, "ALICE"), (10, "CAROL"), (20, "BOB")]:
+            self.pf.write(cust(no, name))
+        self.lf = self.db.open_logical(CUST_BY_NAME, CUST)
+
+    def _names(self, handle) -> list:
+        handle.setll(None)
+        names = []
+        while (rec := handle.read()) is not None:
+            names.append(rec["NAME"].strip())
+        return names
+
+    def test_the_physical_file_still_reads_in_its_own_key_order(self):
+        self.assertEqual(self._names(self.pf), ["CAROL", "BOB", "ALICE"])
+
+    def test_the_logical_file_reads_in_its_own_key_order(self):
+        self.assertEqual(self._names(self.lf), ["ALICE", "BOB", "CAROL"])
+
+    def test_chain_by_the_logical_key(self):
+        rec = self.lf.chain(("BOB",))
+        self.assertEqual(rec["CUSTNO"], 20)
+        self.assertTrue(self.lf.found)
+        self.assertIsNone(self.lf.chain(("NOBODY",)))
+        self.assertFalse(self.lf.found)
+
+    def test_two_handles_over_the_same_table_have_independent_positions(self):
+        self.pf.chain((10,))     # CAROL
+        self.lf.chain(("ALICE",))
+        self.assertEqual(self.pf.read()["NAME"].strip(), "BOB")    # next by CUSTNO after 10
+        self.assertEqual(self.lf.read()["NAME"].strip(), "BOB")    # next by NAME after ALICE, same record here
+
+    def test_a_write_through_the_physical_handle_is_visible_through_the_logical_one(self):
+        self.pf.write(cust(40, "DAVE"))
+        self.assertIsNotNone(self.lf.chain(("DAVE",)))
+
+    def test_open_logical_rejects_a_mismatched_physical_file(self):
+        bogus = LogicalFile(name="X", based_on="NOTCUST", format="R", fields=list(CUST.fields), keys=["NAME"])
+        with self.assertRaises(RpgleError):
+            self.db.open_logical(bogus, CUST)
+
+    def test_authorize_and_errors_see_the_logical_files_own_name(self):
+        asked = []
+        db = Database(authorize=lambda name, op: asked.append((name, op)))
+        self.addCleanup(db.close)
+        lf = db.open_logical(CUST_BY_NAME, CUST)
+        asked.clear()
+        lf.chain(("BOB",))                            # not found: the table is empty here
+        self.assertEqual(asked, [("CUSTBYNAME", "read")])
+        with self.assertRaisesRegex(RpgleError, r"^CUSTBYNAME:"):
+            lf.delete()  # no current record: the error names the file as it was opened
+
 
 if __name__ == "__main__":
     unittest.main()

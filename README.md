@@ -57,6 +57,7 @@ The honest pitch: run, test and port RPG logic anywhere, not replace IBM i. Syst
 | `/COPY` and `/INCLUDE` | no | no | yes |
 | Calls between programs (`CALL`/`PARM`, `extpgm`) | no | no | yes |
 | Printer files and edit codes | no | no | yes |
+| Logical files: a keyed, re-ordered view over a physical file (`PFILE`) | no | no | yes |
 | The 20 core built-in functions (`%TRIM`, `%CHAR`, `%SCAN`, `%DEC`, ...), `NOT`, `*BLANKS`/`*ZEROS` | yes | yes | yes |
 | File-status functions (`%EOF`, `%FOUND`, `%EQUAL`) | yes | yes | yes |
 | Array functions (`%ELEM`, `%LOOKUP`) | no | no | yes |
@@ -275,12 +276,13 @@ Goal: run and test RPG IV logic on Linux, macOS or Windows, with no IBM i licens
   - [x] 4b. `/COPY` and `/INCLUDE`, with `/IF DEFINED`, `/DEFINE`, `/EOF` guards (`-I`, `-D`)
   - [x] 4c. `CALL` between programs: same-folder lookup, `dcl-pr extpgm` and `CALL`/`PARM`/`PLIST`/`*ENTRY`, retained state when `*INLR` is off
   - [x] 4d. `PRINTER` files: externally described, page layout, overflow, edit codes, spool output
+- [x] **5. Logical files (Python).** A keyed, re-ordered view over one physical file's table (`PFILE`), with its own key and its own name for authority checks and error messages. Join, select/omit and choosing or renaming individual fields are not supported yet. See `lf.py`.
 
-- [ ] **5. Port parity.** Bring JS and Go up to the Python port. See "Coming to the JS and Go ports" below
-  - [x] 5a. The behavior fixes, checked by `tools/parity/check.py` and CI
-  - [x] 5b-i. The built-in functions, `NOT` and the figurative constants
-  - [x] 5b-ii. `DISK` files on SQLite, conditioning indicators, `KLIST`/`KFLD`, `%EOF`/`%FOUND`/`%EQUAL`
-  - [ ] 5b-iii. The rest of the features, in the order listed below
+- [ ] **6. Port parity.** Bring JS and Go up to the Python port. See "Coming to the JS and Go ports" below
+  - [x] 6a. The behavior fixes, checked by `tools/parity/check.py` and CI
+  - [x] 6b-i. The built-in functions, `NOT` and the figurative constants
+  - [x] 6b-ii. `DISK` files on SQLite, conditioning indicators, `KLIST`/`KFLD`, `%EOF`/`%FOUND`/`%EQUAL`
+  - [ ] 6b-iii. The rest of the features, in the order listed below
 
 ### Coming to the JS and Go ports
 
@@ -292,6 +294,7 @@ The Python port is the reference. These are planned for the JS and Go ports, rou
 4. **Free-form RPG** (`**FREE`): declarations, loops, procedures, data structures and arrays.
 5. **`/COPY` includes**, **calls between programs**, and **printer files**.
 6. **A command line**, so `rpgle run` works the same from each port.
+7. **Logical files**: a keyed, re-ordered view over a physical file's table.
 
 Until a feature is listed as done for a port in "Status by language", it is Python only. Porting a feature means porting its tests too: the Python suite is the specification.
 
