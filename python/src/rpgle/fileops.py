@@ -72,6 +72,7 @@ class FileRuntime:
         klists: dict[str, list[str]],
         spool: Optional[Spool] = None,
         prtfs: Optional[dict[str, PrintFile]] = None,
+        open_hook: Optional[Callable[[str, str], "PhysicalFile | LogicalFile"]] = None,
     ):
         self._klists = klists
         self._printers: dict[str, PrinterFile] = {}
@@ -80,6 +81,13 @@ class FileRuntime:
         self._files: dict[str, FileHandle] = {}
         self._by_format: dict[str, str] = {}
         self._last: Optional[FileHandle] = None
+        self._db = db
+        self._open_hook = open_hook
+        # USROPN files: declared (their format is already known, for variables and
+        # %by-format lookups) but not opened until an OPEN statement runs. Mode is
+        # the F-spec's own I/O/U/C, carried here so OPEN knows what to ask for.
+        self._pending: dict[str, tuple["PhysicalFile | LogicalFile", str]] = {}
+        self._declared: dict[str, tuple["PhysicalFile | LogicalFile", str]] = {}  # USROPN files, kept for CLOSE
         # data structure name -> prefix of its variables ("cust." if qualified)
         self._ds_prefix = {d.name.lower(): (d.name.lower() + "." if d.qualified else "") for d in prog.dss if not d.dim}
 
@@ -108,6 +116,10 @@ class FileRuntime:
             layout = (pfs or {}).get(name)
             if layout is None:
                 raise RpgleError(f"{name}: no physical file DDS was provided")
+            self._by_format[layout.format] = name
+            if fs.user_open:
+                self._pending[name] = self._declared[name] = (layout, fs.type or "I")
+                continue
             if isinstance(layout, LogicalFile):
                 base = (pfs or {}).get(layout.based_on)
                 if base is None:
@@ -116,7 +128,6 @@ class FileRuntime:
                 self._files[name] = db.open_logical(layout, base, fs.type or "I")  # type: ignore[union-attr]
             else:
                 self._files[name] = db.open_file(layout, fs.type or "I")  # type: ignore[union-attr]
-            self._by_format[layout.format] = name
 
     # ── name and key resolution ──────────────────────────────────
 
@@ -127,6 +138,8 @@ class FileRuntime:
         up = self._by_format.get(up, up)
         h = self._files.get(up)
         if h is None:
+            if up in self._pending:
+                raise RpgleError(f"File {up} is not open: it is declared USROPN and needs an OPEN first")
             raise RpgleError(f"{name} is not a DISK file or record format in this program")
         return h
 
@@ -257,6 +270,35 @@ class FileRuntime:
     def _load(rec: dict, assign: Callable[[str, Any], None], prefix: str) -> None:
         for name, value in rec.items():
             assign(prefix + name, value)
+
+    def open_close(self, op: str, name: Optional[str]) -> None:
+        """OPEN or CLOSE on a USROPN file (the only kind either opcode does anything useful on here).
+        OPEN re-resolves the file through open_hook at the moment it runs, so an OVRDBF the program
+        issued after it started (through QCMDEXC, say) and before OPEN takes effect -- the whole
+        reason USROPN exists. OPEN on a file that is already open, or CLOSE on one that is not, does
+        nothing. CLOSE on a file that was never declared USROPN closes it but nothing reopens it; that
+        would need auto-reopen-on-next-access, not built."""
+        if not name:
+            raise RpgleError(f"{op} needs a file name")
+        up = name.upper()
+        if op == "CLOSE":
+            self._files.pop(up, None)
+            if up in self._declared:
+                self._pending[up] = self._declared[up]
+            return
+        if up in self._files:
+            return  # already open: a no-op, same as the real thing
+        if up not in self._pending:
+            raise RpgleError(f"{name} is not a DISK file in this program")
+        _, mode = self._pending[up]
+        if self._open_hook is None:
+            raise RpgleError(f"{up}: USROPN needs a host that can open files after the program starts "
+                             "(pass open_hook=... to run_program)")
+        layout = self._open_hook(up, mode)
+        if isinstance(layout, LogicalFile):
+            raise RpgleError(f"{up}: opening a logical file with OPEN is not supported yet")
+        self._files[up] = self._db.open_file(layout, mode)  # type: ignore[union-attr]
+        del self._pending[up]
 
     def status(self, kind: str, name: Optional[str]) -> bool:
         """%EOF / %FOUND / %EQUAL. kind is 'eof', 'found' or 'equal'."""

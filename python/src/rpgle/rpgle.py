@@ -57,6 +57,7 @@ class FileSpec:
     addition: Optional[str] = None  # 'A' = records may be added
     keyed: bool = False  # K in column 34 (the PF's DDS key is what actually orders access)
     oflind: Optional[str] = None  # a printer file's overflow indicator: *INOF, *IN90, or an ind variable
+    user_open: bool = False  # USROPN: not opened at program start, needs an explicit OPEN
 
 
 @dataclass
@@ -209,6 +210,10 @@ def _oflind(keywords: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
+def _user_open(keywords: str) -> bool:
+    return "USROPN" in keywords.upper().split()
+
+
 def _parse(source: str) -> Program:
     from .freeform import is_free, parse_free  # local: freeform imports this module
 
@@ -244,6 +249,7 @@ def _parse(source: str) -> Program:
                 addition=col(line, 20, 20) or None,
                 keyed=col(line, 34, 34).upper() == "K",
                 oflind=_oflind(line[43:] if len(line) > 43 else ""),
+                user_open=_user_open(line[43:] if len(line) > 43 else ""),
             )
             prog.files.append(fs)
             # prog.file stays "the WORKSTN file" (first one wins) so

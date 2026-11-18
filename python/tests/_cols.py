@@ -12,7 +12,7 @@ def _put(buf: list, start: int, text: str) -> None:
         buf[idx] = ch
 
 
-def fspec(name, ftype="I", desig="F", addition="", fmt="E", keyed=False, device="DISK") -> str:
+def fspec(name, ftype="I", desig="F", addition="", fmt="E", keyed=False, device="DISK", keywords="") -> str:
     b = [" "] * 5 + ["F"]
     _put(b, 7, name)
     _put(b, 17, ftype)
@@ -22,6 +22,7 @@ def fspec(name, ftype="I", desig="F", addition="", fmt="E", keyed=False, device=
     if keyed:
         _put(b, 34, "K")
     _put(b, 36, device)
+    _put(b, 44, keywords)
     return "".join(b).rstrip()
 
 
