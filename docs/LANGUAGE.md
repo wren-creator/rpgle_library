@@ -404,7 +404,7 @@ The position is held as a key, not a database cursor, so deleting or updating re
 
 ### Not supported
 
-`DESCEND` keys, join and select/omit logical files, more than one record format per file, record locking, `READC`, `CLOSE`/`OPEN` and `USROPN`, `%ERROR`, `PREFIX`/`RENAME`, program-described files, `*PSSR`. The F-spec type (`I`/`U`/`O`) is read but not enforced. Decimal fields are shown with an explicit decimal point (one column wider than a real 5250 would draw them) so a value survives being typed back in.
+`DESCEND` keys, more than one record format per file, `READC`, `%ERROR`, `PREFIX`/`RENAME`, program-described files, `*PSSR`. The F-spec type (`I`/`U`/`O`) is read but not enforced. Decimal fields are shown with an explicit decimal point (one column wider than a real 5250 would draw them) so a value survives being typed back in. (Record locking, `CLOSE`/`OPEN`/`USROPN`, and join/select-omit logical files are supported in the Python port; see the Changelog.)
 
 ## Indicators
 
@@ -492,10 +492,10 @@ RPG has no `%REM` built-in until well past V4R3. The classic, unambiguous way to
 
 Nothing here is an oversight: each is documented where it matters, and each is an **error rather than a silent skip** wherever a program could otherwise run and give a wrong answer.
 
-- **Whole areas:** system APIs, CL, data areas and data queues, job and spool-queue behavior, ILE binding and service programs (`extproc`), activation groups, commitment control, SQL (`EXEC SQL`), and record locking.
+- **Whole areas:** system APIs, CL, data areas and data queues, job and spool-queue behavior, ILE binding and service programs (`extproc`), activation groups, commitment control, SQL (`EXEC SQL`).
 - **Source forms:** O-specs and program-described files, mixed fixed-and-free source, `/IF` conditions other than `DEFINED`, `**CTDATA` compile-time arrays.
 - **Language:** `MONITOR`/`ON-ERROR` and `%ERROR`, the `(E)` opcode extender, `DSPLY`, date, time and timestamp types, pointers, `%EDITC`/`%EDITW`/`%XLATE`, `*OMIT`, `%PARMS`, procedures taking data structures as parameters, arrays inside data structures.
-- **Files:** subfiles and windows in display DDS, DDS keyword continuation lines, OR'd and multi-line indicator conditions, `DESCEND` keys, joined and select/omit logical files, `READC`, user-controlled open/close.
+- **Files:** subfiles and windows in display DDS, DDS keyword continuation lines, OR'd and multi-line indicator conditions, `DESCEND` keys, choosing or renaming individual fields on a logical file, `READC`.
 - **Printing:** overprinting (`SPACEA(0)`), `DATE`/`TIME`/`USER`/`SYSNAME` fields, `EDTWRD`, edit codes outside the supported set, barcodes.
 - **The JS and Go ports** have none of the rest of the Python runtime (free-form, includes, calls, printing, arrays, data structures, procedures). See the root README's "Status by language".
 

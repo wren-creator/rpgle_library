@@ -276,7 +276,7 @@ Goal: run and test RPG IV logic on Linux, macOS or Windows, with no IBM i licens
   - [x] 4b. `/COPY` and `/INCLUDE`, with `/IF DEFINED`, `/DEFINE`, `/EOF` guards (`-I`, `-D`)
   - [x] 4c. `CALL` between programs: same-folder lookup, `dcl-pr extpgm` and `CALL`/`PARM`/`PLIST`/`*ENTRY`, retained state when `*INLR` is off
   - [x] 4d. `PRINTER` files: externally described, page layout, overflow, edit codes, spool output
-- [x] **5. Logical files (Python).** A keyed, re-ordered view over one physical file's table (`PFILE`), with its own key and its own name for authority checks and error messages. Join, select/omit and choosing or renaming individual fields are not supported yet. See `lf.py`.
+- [x] **5. Logical files (Python).** A keyed, re-ordered view over one physical file's table (`PFILE`), with its own key and its own name for authority checks and error messages, a select/omit filter (`S`/`O` lines), or a join across several physical files (`JFILE`, star topology, inner join only, read-only). Choosing or renaming individual fields is not supported yet. See `lf.py`.
 
 - [ ] **6. Port parity.** Bring JS and Go up to the Python port. See "Coming to the JS and Go ports" below
   - [x] 6a. The behavior fixes, checked by `tools/parity/check.py` and CI
