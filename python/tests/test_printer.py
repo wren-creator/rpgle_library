@@ -255,6 +255,23 @@ class SpoolTest(unittest.TestCase):
         put(sp.open("LOUD", d), "R1")
         self.assertEqual([n for n, _ in sp.outputs()], ["loud"])
 
+    def test_a_files_own_page_length_overrides_the_spools(self):
+        d = prtf(pdds_line("R", "R1"), pdds_line("", "", "", "", "", 1, 1, "'x'"))
+        d.page_length = 10
+        pf = Spool(page_length=66, overflow_line=60).open("RPT", d)
+        self.assertEqual(pf.page_length, 10)
+
+    def test_no_override_keeps_the_spools_own_page_length(self):
+        d = prtf(pdds_line("R", "R1"), pdds_line("", "", "", "", "", 1, 1, "'x'"))
+        pf = Spool(page_length=66, overflow_line=60).open("RPT", d)
+        self.assertEqual(pf.page_length, 66)
+
+    def test_the_overflow_line_clamps_down_with_a_shorter_override(self):
+        d = prtf(pdds_line("R", "R1"), pdds_line("", "", "", "", "", 1, 1, "'x'"))
+        d.page_length = 10
+        pf = Spool(page_length=66, overflow_line=60).open("RPT", d)
+        self.assertEqual(pf.overflow_line, 10)
+
 
 if __name__ == "__main__":
     unittest.main()
