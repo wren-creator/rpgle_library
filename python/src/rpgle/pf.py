@@ -20,9 +20,10 @@ files up to the keywords):
   45-80  Keywords (UNIQUE before the R line makes the key unique;
          DESCEND on a key line is parsed but rejected, see below)
 
-Not supported: DESCEND keys, join and select/omit logical files,
-ALIAS, TEXT/COLHDG-driven behavior (ignored), field references
-(REF/REFFLD). A K line naming a field not in the format is an error.
+Not supported: DESCEND keys, ALIAS, TEXT/COLHDG-driven behavior
+(ignored), field references (REF/REFFLD). A K line naming a field
+not in the format is an error. (Join and select/omit logical files
+are supported -- see lf.py, which this file does not touch.)
 ─────────────────────────────────────────────────────────────────
 """
 

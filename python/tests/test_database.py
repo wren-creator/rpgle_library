@@ -446,5 +446,137 @@ class LogicalFileTest(unittest.TestCase):
             lf.delete()  # no current record: the error names the file as it was opened
 
 
+CUST_OVER_100 = parse_lf(
+    "custover100",
+    dds(
+        dds_line(keywords="PFILE(CUSTMAST)"),
+        dds_line("R", "CUSTREC"),
+        dds_line("K", "CUSTNO"),
+        dds_line("S", "BAL", keywords="COMP(GT 100)"),
+    ),
+    CUST,
+)
+
+CUST_NOT_BOB = parse_lf(
+    "custnotbob",
+    dds(
+        dds_line(keywords="PFILE(CUSTMAST)"),
+        dds_line("R", "CUSTREC"),
+        dds_line("K", "CUSTNO"),
+        dds_line("O", "NAME", keywords="COMP(EQ 'BOB')"),
+    ),
+    CUST,
+)
+
+
+class SelectOmitTest(unittest.TestCase):
+    """A select/omit logical file reads the same table as its physical file, but only the
+    records its S/O lines allow through: every read, chain and position acts as if the other
+    records were not there at all."""
+
+    def setUp(self):
+        self.db = Database()
+        self.addCleanup(self.db.close)
+        pf = self.db.open_file(CUST)
+        for no, name, bal in [(10, "ALICE", 50.0), (20, "BOB", 200.0), (30, "CAROL", 150.0)]:
+            pf.write(cust(no, name, bal))
+
+    def _names(self, handle) -> list:
+        handle.setll(None)
+        names = []
+        while (rec := handle.read()) is not None:
+            names.append(rec["NAME"].strip())
+        return names
+
+    def test_a_select_line_only_shows_matching_records(self):
+        lf = self.db.open_logical(CUST_OVER_100, CUST)
+        self.assertEqual(self._names(lf), ["BOB", "CAROL"])
+
+    def test_an_omit_line_hides_matching_records(self):
+        lf = self.db.open_logical(CUST_NOT_BOB, CUST)
+        self.assertEqual(self._names(lf), ["ALICE", "CAROL"])
+
+    def test_chain_also_respects_the_filter(self):
+        lf = self.db.open_logical(CUST_OVER_100, CUST)
+        self.assertIsNone(lf.chain((10,)))       # ALICE: BAL 50, filtered out
+        self.assertFalse(lf.found)
+        self.assertIsNotNone(lf.chain((20,)))    # BOB: BAL 200, passes
+        self.assertTrue(lf.found)
+
+    def test_the_underlying_physical_file_still_sees_every_record(self):
+        lf = self.db.open_logical(CUST_OVER_100, CUST)
+        pf = self.db.open_file(CUST)
+        self.assertEqual(self._names(lf), ["BOB", "CAROL"])
+        self.assertEqual(self._names(pf), ["ALICE", "BOB", "CAROL"])
+
+
+ORDJOIN = parse_lf(
+    "custord",
+    dds(
+        dds_line(keywords="JFILE(CUSTMAST ORDERS)"),
+        dds_line("R", "JOINREC"),
+        dds_line("J", keywords="JOIN(1)"),
+        dds_line("", keywords="JFLD(CUSTNO CUSTNO)"),
+        dds_line("K", "ORDNO"),
+    ),
+    CUST,
+    {"ORDERS": ORDERS},
+)
+
+
+class JoinLogicalFileTest(unittest.TestCase):
+    """A join logical file combines a primary and its secondaries into one read-only view,
+    one row per matching combination, in the join logical file's own key order."""
+
+    def setUp(self):
+        self.db = Database()
+        self.addCleanup(self.db.close)
+        pf = self.db.open_file(CUST)
+        for no, name, bal in [(10, "ALICE", 50.0), (20, "BOB", 200.0)]:
+            pf.write(cust(no, name, bal))
+        of = self.db.open_file(ORDERS)
+        of.write(order(10, 1, 9.0))
+        of.write(order(10, 2, 19.0))
+        of.write(order(20, 3, 29.0))
+        self.lf = self.db.open_join(ORDJOIN, {"CUSTMAST": CUST, "ORDERS": ORDERS})
+
+    def test_every_field_of_both_files_shows(self):
+        self.lf.setll(None)
+        rec = self.lf.read()
+        self.assertEqual(set(rec.keys()), {"CUSTNO", "NAME", "BAL", "ORDNO", "AMT"})
+
+    def test_reads_in_the_join_logical_files_own_key_order(self):
+        self.lf.setll(None)
+        orders = []
+        while (rec := self.lf.read()) is not None:
+            orders.append(rec["ORDNO"])
+        self.assertEqual(orders, [1, 2, 3])
+
+    def test_a_customer_with_no_orders_does_not_show_an_inner_join(self):
+        self.db.open_file(CUST).write(cust(30, "CAROL", 0.0))
+        self.lf.setll(None)
+        names = []
+        while (rec := self.lf.read()) is not None:
+            names.append(rec["NAME"].strip())
+        self.assertNotIn("CAROL", names)
+
+    def test_chain_by_the_join_logical_files_key(self):
+        rec = self.lf.chain((2,))
+        self.assertEqual((rec["CUSTNO"], rec["NAME"].strip(), rec["AMT"]), (10, "ALICE", 19.0))
+
+    def test_a_join_logical_file_is_read_only(self):
+        with self.assertRaisesRegex(RpgleError, "read-only"):
+            self.lf.write({"CUSTNO": 10, "NAME": "X", "BAL": 0.0, "ORDNO": 9, "AMT": 1.0})
+        self.lf.chain((1,))
+        with self.assertRaisesRegex(RpgleError, "read-only"):
+            self.lf.update({"CUSTNO": 10, "NAME": "X", "BAL": 0.0, "ORDNO": 1, "AMT": 1.0})
+        with self.assertRaisesRegex(RpgleError, "read-only"):
+            self.lf.delete()
+
+    def test_open_join_needs_every_secondary_physical_file_given(self):
+        with self.assertRaises(KeyError):
+            self.db.open_join(ORDJOIN, {"CUSTMAST": CUST})
+
+
 if __name__ == "__main__":
     unittest.main()

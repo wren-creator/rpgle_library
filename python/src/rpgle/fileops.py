@@ -120,7 +120,15 @@ class FileRuntime:
             if fs.user_open:
                 self._pending[name] = self._declared[name] = (layout, fs.type or "I")
                 continue
-            if isinstance(layout, LogicalFile):
+            if isinstance(layout, LogicalFile) and layout.is_join:
+                needed = {layout.based_on, *(jf.name for jf in layout.joined)}
+                sub = {n: (pfs or {}).get(n) for n in needed}
+                missing = next((n for n, v in sub.items() if v is None), None)
+                if missing:
+                    raise RpgleError(f"{name}: physical file {missing} for this join logical file "
+                                     "was not provided")
+                self._files[name] = db.open_join(layout, sub, fs.type or "I")  # type: ignore[union-attr]
+            elif isinstance(layout, LogicalFile):
                 base = (pfs or {}).get(layout.based_on)
                 if base is None:
                     raise RpgleError(f"{name}: physical file {layout.based_on} for this logical file "
