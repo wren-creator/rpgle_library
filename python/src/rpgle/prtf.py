@@ -70,6 +70,9 @@ class PrintFormat:
 class PrintFile:
     name: str
     formats: dict[str, PrintFormat]  # by upper-case format name, in source order
+    # A host's per-file page length override (e.g. CHGPRTF's PAGESIZE), set directly on this object
+    # after parse_prtf() returns -- there is no DDS keyword for it here. None means Spool's own default.
+    page_length: Optional[int] = None
 
 
 def _num_param(fmt: str, kw: str, params: list[str]) -> int:

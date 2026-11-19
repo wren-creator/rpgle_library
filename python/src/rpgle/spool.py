@@ -205,7 +205,12 @@ class Spool:
         return out
 
     def open(self, name: str, defs: PrintFile) -> PrinterFile:
-        pf = PrinterFile(name, defs, self.page_length, self.overflow_line)
+        """A per-file `defs.page_length` (see PrintFile) overrides this Spool's own page length for
+        just this file; the overflow line follows this Spool's own default, clamped down if the
+        override made the page shorter than it."""
+        page_length = defs.page_length if defs.page_length is not None else self.page_length
+        overflow_line = min(self.overflow_line, page_length)
+        pf = PrinterFile(name, defs, page_length, overflow_line)
         self.files.append(pf)
         return pf
 
