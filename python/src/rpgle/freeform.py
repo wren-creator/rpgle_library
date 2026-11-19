@@ -52,6 +52,7 @@ _FOR = re.compile(
 
 _KEYED_OPS = {"chain", "setll", "setgt", "reade", "readpe"}  # key then file
 _FILE_ONLY_OPS = {"read", "readp", "write", "update"}  # file or record format
+_OPEN_CLOSE_OPS = {"open", "close"}  # a USROPN file name, nothing else
 _SIMPLE = {"else", "endif", "enddo", "endfor", "select", "other", "endsl", "endsr", "leave", "iter"}
 _UNSUPPORTED = {
     "monitor": "MONITOR/ON-ERROR is not supported",
@@ -332,7 +333,7 @@ def _parse_dcl_f(prog: Program, rest: str) -> None:
     tokens = [t for t in tokens if t]
     if not tokens:
         raise RpgleError("dcl-f needs a file name")
-    name, device, usage, keyed, oflind = tokens[0], None, [], False, None
+    name, device, usage, keyed, oflind, user_open = tokens[0], None, [], False, None, False
     if not is_object_name(name):
         raise RpgleError(f"dcl-f {name!r}: not a valid file name (letters, digits and _ $ # @ only)")
     for tok in tokens[1:]:
@@ -341,6 +342,8 @@ def _parse_dcl_f(prog: Program, rest: str) -> None:
             device = low.upper()
         elif low == "keyed":
             keyed = True
+        elif low == "usropn":
+            user_open = True
         elif low.startswith("usage("):
             usage = [u.strip().lower().lstrip("*") for u in tok[6:-1].split(":")]
         elif low.startswith("oflind("):
@@ -369,6 +372,7 @@ def _parse_dcl_f(prog: Program, rest: str) -> None:
         addition="A" if "output" in usage and device == "DISK" else None,
         keyed=keyed,
         oflind=oflind,
+        user_open=user_open,
     )
     prog.files.append(fs)
     if device == "WORKSTN" and not prog.file.name:
@@ -529,6 +533,12 @@ def _statement(state: _State, text: str, line: int) -> None:
         if not fm:
             raise RpgleError(f"{word} takes a file or record format name, then optionally a data structure; got {rest!r}")
         return add(word.upper(), factor2=fm.group(1), ds=fm.group(2))
+
+    if word in _OPEN_CLOSE_OPS:
+        fm = re.match(r"^([A-Za-z_]\w*)$", rest)
+        if not fm:
+            raise RpgleError(f"{word} takes a file name; got {rest!r}")
+        return add(word.upper(), factor2=fm.group(1))
 
     if word == "callp":
         return _add_call(add, rest)

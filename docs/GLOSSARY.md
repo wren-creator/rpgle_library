@@ -95,7 +95,7 @@ In the DDS/5250 sense (distinct from the 3270 field-attribute-byte sense some re
 An indicator (`*INOF`, usually) that a printer file turns on when a record reaches the overflow line, to tell the program the page is nearly full. It's up to the program to react, typically by printing its headings again and turning the indicator off. See "Printer Files" in [`LANGUAGE.md`](./LANGUAGE.md).
 
 ### Physical File / Logical File
-A physical file stores records; its DDS defines the fields and the key. A logical file is a view over one or more physical files, with a different key or a subset of records. This library supports physical files (as SQLite tables); joined and select/omit logical files are not supported. See "Physical Files" in [`DDS_REFERENCE.md`](./DDS_REFERENCE.md).
+A physical file stores records; its DDS defines the fields and the key. A logical file is a view over one or more physical files, with a different key or a subset of records. This library supports physical files (as SQLite tables) and, in the Python port, logical files: a re-keyed view over one, a select/omit filter over one, or a join across several. See "Physical Files" and "Logical Files" in [`DDS_REFERENCE.md`](./DDS_REFERENCE.md).
 
 ### Printer File (PRTF)
 A file a program writes printed output to. Like a display file it is externally described: its DDS lists record formats made of fields and constants placed on lines and columns, plus spacing keywords (`SKIPB`, `SPACEA`) that say where on the page each record goes. The program prints by `WRITE`-ing a record format. See [`DDS_REFERENCE.md`](./DDS_REFERENCE.md).

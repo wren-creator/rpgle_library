@@ -464,6 +464,9 @@ def compile_program(statements) -> Compiled:
                 )
             )
 
+        elif op in ("OPEN", "CLOSE"):
+            instrs.append(Instr(op=op, factor2=stmt.factor2))
+
         elif op == "CLEAR":
             instrs.append(Instr(op="CLEAR", expr=stmt.expr))
 
@@ -807,6 +810,7 @@ def run_program(
     spool: Optional[Spool] = None,
     max_steps: int = 0,
     system_programs: Optional[dict[str, Callable[[list], None]]] = None,
+    open_hook: Optional[Callable[[str, str], PhysicalFile]] = None,
 ) -> Generator[ScreenData, Optional[Resume], None]:
     """Runs the program. Yields a ScreenData on every EXFMT; resume
     with .send(Resume(key, values)) where key is whatever function key
@@ -828,9 +832,14 @@ def run_program(
     instead of hanging the host), and system_programs, a dict of upper-case
     program name -> hook(list of argument values) for programs the host
     answers itself, such as QCMDEXC.
+
+    A program with a USROPN F-spec needs open_hook, hook(file name, I/O/U/C) ->
+    PhysicalFile, called when an OPEN statement runs (not at program start), so a host
+    can re-check authority and re-apply an override issued after the program started
+    and before the OPEN. Raise RpgleError from it to refuse the OPEN.
     """
     try:
-        yield from _run_program(prog, dds, db, pfs, loader, spool, max_steps, system_programs)
+        yield from _run_program(prog, dds, db, pfs, loader, spool, max_steps, system_programs, open_hook)
     finally:
         if db is not None:
             db.commit()
@@ -922,10 +931,12 @@ class _Calls:
         spool: Optional[Spool] = None,
         max_steps: int = 0,
         system_programs: Optional[dict[str, Callable[[list], None]]] = None,
+        open_hook: Optional[Callable[[str, str], PhysicalFile]] = None,
     ):
         self.loader = loader
         self.db = db
         self.spool = spool
+        self.open_hook = open_hook
         # A host that runs other people's programs can cap how many instructions
         # run between screens (0 = no cap); the count restarts at each EXFMT,
         # and is shared by a program and everything it calls.
@@ -1292,6 +1303,10 @@ class _Runtime:
                 )
                 pc += 1
 
+            elif op in ("OPEN", "CLOSE"):
+                files.open_close(op, instr.factor2)
+                pc += 1
+
             elif op == "CALL":
                 target = instr.factor2.strip()
                 if target.startswith("'"):
@@ -1363,7 +1378,8 @@ def _new_instance(loaded: LoadedProgram, calls: _Calls) -> _Instance:
         variables = build_vars(prog, loaded.dds, loaded.pfs, prtfs)
         indicators: dict[str, bool] = {}
         compiled = compile_program(prog.statements)
-        files = FileRuntime(prog, calls.db, loaded.pfs, compiled.klists, spool=calls.spool, prtfs=prtfs)
+        files = FileRuntime(prog, calls.db, loaded.pfs, compiled.klists, spool=calls.spool, prtfs=prtfs,
+                             open_hook=calls.open_hook)
         rt = _Runtime(
             prog, loaded.dds, loaded.pfs, variables, indicators, files, compile_procs(prog.procs),
             calls=calls, directory=loaded.path.parent,
@@ -1394,13 +1410,14 @@ def _run_program(
     spool: Optional[Spool] = None,
     max_steps: int = 0,
     system_programs: Optional[dict[str, Callable[[list], None]]] = None,
+    open_hook: Optional[Callable[[str, str], PhysicalFile]] = None,
 ) -> Generator[ScreenData, Optional[Resume], None]:
     prtfs = spool.load_defs(prog) if spool is not None else {}
     variables = build_vars(prog, dds, pfs, prtfs)
     indicators: dict[str, bool] = {}
     compiled = compile_program(prog.statements)
-    calls = _Calls(loader, db, spool, max_steps, system_programs)     # first: its stack is there when the files open
-    files = FileRuntime(prog, db, pfs, compiled.klists, spool=spool, prtfs=prtfs)
+    calls = _Calls(loader, db, spool, max_steps, system_programs, open_hook)  # first: its stack is there when the files open
+    files = FileRuntime(prog, db, pfs, compiled.klists, spool=spool, prtfs=prtfs, open_hook=open_hook)
     rt = _Runtime(
         prog, dds, pfs, variables, indicators, files, compile_procs(prog.procs),
         calls=calls, directory=loader.dirs[0] if loader is not None and loader.dirs else None,

@@ -108,7 +108,24 @@ A DISK file's DDS describes one record format, its fields, and its key. The RPG 
 - Numeric types `P`, `S`, `B`, `F`, or any field with decimal positions, are numeric. Blank type with no decimals is character.
 - `K CUSTNO`: key field, in order. No `K` lines means arrival sequence, and `CHAIN` takes a relative record number.
 
-Not supported: `DESCEND` keys (rejected with an error), join and select/omit logical files, `REF`/`REFFLD`, `ALIAS`, more than one record format per file.
+Not supported: `DESCEND` keys (rejected with an error), `REF`/`REFFLD`, `ALIAS`, more than one record format per file.
+
+## Logical Files (LF)
+
+Python only. A logical file's DDS is read by `parse_lf()` in `python/src/rpgle/lf.py`, over one or more already-parsed physical files.
+
+```
+     A                                      PFILE(CUSTMAST)
+     A          R CUSTREC
+     A          K ZIP
+     A          S ZIP                        COMP(EQ '90210')
+```
+
+- `PFILE(name)` (before the `R` line): the one physical file a plain logical file re-keys. Every field of that file shows, in its own order; choosing or renaming individual fields is not supported.
+- `S`/`O` (select/omit) lines: `S` requires a match, `O` excludes one, each giving one `COMP(op value)`, `RANGE(lo hi)` or `VALUES(v1 v2 ...)` condition (`op` one of `EQ`, `NE`, `GT`, `LT`, `GE`, `LE`). Every `S` and every `O` line is ANDed together.
+- `JFILE(primary secondary...)` in place of `PFILE`: a join logical file, primary first. Each secondary gets a `J` line (`JOIN(1)`, joining straight to the primary — a secondary joined to another secondary is not supported) followed by one or more `JFLD(primary-field secondary-field)` lines. Built as an inner join; `JDUPSEQ` (more than one matching row per secondary) is rejected. A join logical file is read-only.
+
+Not supported: `DESCEND` keys, choosing or renaming individual fields.
 
 ## Printer Files (PRTF)
 

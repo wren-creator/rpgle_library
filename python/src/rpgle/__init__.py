@@ -40,7 +40,7 @@ from .interpreter import (
     run_program,
 )
 from .include import expand_includes
-from .lf import LogicalFile, find_pfile, parse_lf
+from .lf import JoinedFile, LogicalFile, find_pfile, find_pfiles, parse_lf
 from .loader import CallError, LoadedProgram, ProgramLoader, load_pfs
 from .pf import PfField, PhysicalFile, parse_pf
 from .prtf import PrintFile, parse_prtf
@@ -80,8 +80,10 @@ __all__ = [
     "parse_pf",
     # lf.py
     "LogicalFile",
+    "JoinedFile",
     "parse_lf",
     "find_pfile",
+    "find_pfiles",
     # expr.py
     "Context",
     "Var",

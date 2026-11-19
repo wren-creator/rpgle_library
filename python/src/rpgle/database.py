@@ -45,7 +45,7 @@ from typing import Any, Callable, Optional
 
 from .errors import RpgleError
 from .expr import as_float, as_string
-from .lf import LogicalFile
+from .lf import _COMPS, LogicalFile
 from .pf import PfField, PhysicalFile
 
 _RRN = "_rrn"
@@ -79,33 +79,98 @@ def _to_db(f: PfField, value: Any) -> Any:
     return int(n) if f.dec == 0 else n
 
 
+def _literal(f: PfField, raw: str) -> Any:
+    """One select/omit DDS literal ('ABC' or a bare number), coerced the way a value typed
+    into that field would be."""
+    text = raw[1:-1] if raw.startswith("'") and raw.endswith("'") else raw
+    return _to_db(f, text)
+
+
+def _filter_from(lf: LogicalFile, fields: dict[str, PfField]) -> tuple[str, list]:
+    """A select/omit logical file's extra WHERE clause: every select line ANDed together, and
+    NOT(every omit line) ANDed in too (see lf.py's module docstring for what this does not model)."""
+    parts: list[str] = []
+    params: list = []
+    for c in lf.conditions:
+        f, col = fields[c.field], _q(c.field)
+        if c.op == "COMP":
+            sql, vals = f"{col} {_COMPS[c.comp]} ?", [_literal(f, c.args[0])]
+        elif c.op == "RANGE":
+            sql, vals = f"{col} BETWEEN ? AND ?", [_literal(f, a) for a in c.args]
+        else:  # VALUES
+            sql, vals = f"{col} IN ({', '.join('?' for _ in c.args)})", [_literal(f, a) for a in c.args]
+        parts.append(f"NOT ({sql})" if c.exclude else sql)
+        params += vals
+    return (" AND ".join(parts) if parts else "", params)
+
+
 class FileHandle:
     """One open DISK file."""
 
     def __init__(self, conn: sqlite3.Connection, pf: PhysicalFile,
                  authorize: Optional[Callable[[str, str], None]] = None,
-                 open_name: Optional[str] = None, key_cols: Optional[list[str]] = None):
+                 open_name: Optional[str] = None, key_cols: Optional[list[str]] = None,
+                 mode: str = "I", lock: Optional[Callable[[str, int], bool]] = None,
+                 unlock: Optional[Callable[[str, int], None]] = None, readonly: bool = False,
+                 table_name: Optional[str] = None, fields: Optional[list[PfField]] = None,
+                 filter_sql: str = "", filter_params: Optional[list] = None):
         self._conn = conn
         self.pf = pf
         self._authorize = authorize
         # The name authority and errors are reported against: the physical file itself when
-        # opened directly, or a logical file's own name when opened through one (see open_logical).
+        # opened directly, or a logical file's own name when opened through one (see open_logical
+        # and open_join).
         self._name = (open_name or pf.name).upper()
-        self._table = _q(pf.name)
-        self._cols = [f.name for f in pf.fields]
-        self._field = {f.name: f for f in pf.fields}
+        # table_name/fields let open_join point this handle at a join's own SQL view, with the
+        # combined field list, instead of pf's own table and fields.
+        self._table = _q(table_name or pf.name)
+        field_list = fields if fields is not None else pf.fields
+        self._cols = [f.name for f in field_list]
+        self._field = {f.name: f for f in field_list}
         # Arrival-sequence files are "keyed" by relative record number.
         self.key_cols = list(key_cols) if key_cols is not None else (list(pf.keys) if pf.keys else [_RRN])
+        # A select/omit logical file's extra WHERE clause, ANDed into every read (see _apply_filter);
+        # a join logical file is read-only, the same as a real one (see write/update/delete).
+        self.readonly = readonly
+        self._filter_sql = filter_sql
+        self._filter_params = list(filter_params or [])
         self._pos: tuple = ("setll", ())
         self._current: Optional[int] = None  # rrn of the record last read/chained
         self.found = False
         self.eof = False
         self.equal = False
+        # Record-level locking: a positioned read in U or C mode locks the record it lands on, by the
+        # physical file's own name (two names open on one table, see open_logical, contend for the
+        # same lock) and rrn, until the record moves, is written, or the job ends. lock(name, rrn)
+        # returns whether the lock was granted; the host decides who already holds it.
+        self.mode = (mode or "I").upper()
+        self._lock = lock
+        self._unlock = unlock
+        self._locked_rrn: Optional[int] = None
 
     def _check(self, op: str) -> None:
         """Ask the host whether an operation ("read", "add", "update", "delete") is allowed."""
         if self._authorize is not None:
             self._authorize(self._name, op)
+
+    def _acquire(self, rrn: int) -> None:
+        if self.mode not in ("U", "C") or self._lock is None:
+            return
+        self._release()
+        if not self._lock(self.pf.name, rrn):
+            raise RpgleError(f"{self._name}: record is locked by another job")
+        self._locked_rrn = rrn
+
+    def _release(self) -> None:
+        if self._locked_rrn is not None:
+            if self._unlock is not None:
+                self._unlock(self.pf.name, self._locked_rrn)
+            self._locked_rrn = None
+
+    def release(self) -> None:
+        """Give up whatever record this handle has locked, without otherwise disturbing it. For a
+        host to call when a job signs off or a USROPN file is closed."""
+        self._release()
 
     # ── key handling ─────────────────────────────────────────────
 
@@ -132,7 +197,15 @@ class FileHandle:
     def _row_to_record(self, row: sqlite3.Row) -> dict:
         return {c: row[c] for c in self._cols}
 
+    def _apply_filter(self, where: str, params: list) -> tuple[str, list]:
+        """A select/omit logical file's extra condition, ANDed into every read. Plain files and
+        joins (whose filtering is built into their own view) pass through unchanged."""
+        if not self._filter_sql:
+            return where, params
+        return f"({where}) AND ({self._filter_sql})", [*params, *self._filter_params]
+
     def _select(self, where: str, params: list, forward: bool) -> Optional[sqlite3.Row]:
+        where, params = self._apply_filter(where, params)
         order = ", ".join(f"{_q(c)} {'ASC' if forward else 'DESC'}" for c in [*self.key_cols, _RRN])
         sql = f"SELECT * FROM {self._table} WHERE {where} ORDER BY {order} LIMIT 1"
         cur = self._conn.execute(sql, params)
@@ -166,6 +239,7 @@ class FileHandle:
         self._pos = ("rec", key, row[_RRN])
         self._current = row[_RRN]
         self.eof = False
+        self._acquire(row[_RRN])
         return rec
 
     def _step(self, forward: bool, match: Optional[tuple] = None) -> Optional[dict]:
@@ -244,9 +318,14 @@ class FileHandle:
         self.equal = self._count(eq, list(prefix)) > 0
 
     def _count(self, where: str, params: list) -> int:
+        where, params = self._apply_filter(where, params)
         return self._conn.execute(f"SELECT COUNT(*) FROM {self._table} WHERE {where}", params).fetchone()[0]
 
     # ── writing ──────────────────────────────────────────────────
+
+    def _check_writable(self) -> None:
+        if self.readonly:
+            raise RpgleError(f"{self._name}: a join logical file is read-only")
 
     def _values(self, record: dict) -> list:
         missing = [c for c in self._cols if c not in record]
@@ -255,6 +334,7 @@ class FileHandle:
         return [_to_db(self._field[c], record[c]) for c in self._cols]
 
     def write(self, record: dict) -> None:
+        self._check_writable()
         self._check("add")
         cols = ", ".join(_q(c) for c in self._cols)
         marks = ", ".join("?" for _ in self._cols)
@@ -264,6 +344,7 @@ class FileHandle:
             raise RpgleError(f"{self._name}: duplicate key") from None
 
     def update(self, record: dict) -> None:
+        self._check_writable()
         self._check("update")
         if self._current is None:
             raise RpgleError(f"{self._name}: UPDATE with no current record (read or chain one first)")
@@ -281,11 +362,13 @@ class FileHandle:
             f"SELECT * FROM {self._table} WHERE {_q(_RRN)} = ?", [self._current]
         ).fetchone()
         self._pos = ("rec", self._record_key({c: row[c] for c in self.key_cols}), self._current)
+        self._release()
 
     def delete(self, key: Optional[tuple] = None) -> bool:
         """Deletes the record with the given key (first match), or the
         current record when key is None. Returns whether one was deleted.
         """
+        self._check_writable()
         self._check("delete")
         if key is None:
             if self._current is None:
@@ -303,6 +386,7 @@ class FileHandle:
         self.found = cur.rowcount > 0
         if rrn == self._current:
             self._current = None
+            self._release()
         return self.found
 
 
@@ -311,11 +395,17 @@ class Database:
     default) is private to this process and vanishes on close.
     """
 
-    def __init__(self, path: str = ":memory:", authorize: Optional[Callable[[str, str], None]] = None):
+    def __init__(self, path: str = ":memory:", authorize: Optional[Callable[[str, str], None]] = None,
+                 lock: Optional[Callable[[str, int], bool]] = None,
+                 unlock: Optional[Callable[[str, int], None]] = None):
         # authorize(file name, operation) is a host's chance to refuse: it is asked at open
         # ("open:I", "open:U", "open:O", "open:C", the F-spec's usage) and before every
         # "read", "add", "update" and "delete", and refuses by raising RpgleError.
+        # lock(physical file name, rrn) / unlock(...) are a host's record-level locking, asked only
+        # for files opened U or C: see FileHandle._acquire.
         self._authorize = authorize
+        self._lock = lock
+        self._unlock = unlock
         self._conn = sqlite3.connect(path)
         self._conn.row_factory = sqlite3.Row
         self._handles: dict[str, FileHandle] = {}
@@ -347,7 +437,7 @@ class Database:
             cols = ", ".join(_q(k) for k in pf.keys)
             self._conn.execute(f"CREATE {'UNIQUE ' if pf.unique else ''}INDEX IF NOT EXISTS {idx} ON "
                                f"{_q(pf.name)} ({cols})")
-        h = FileHandle(self._conn, pf, self._authorize)
+        h = FileHandle(self._conn, pf, self._authorize, mode=mode, lock=self._lock, unlock=self._unlock)
         self._handles[pf.name] = h
         return h
 
@@ -366,7 +456,43 @@ class Database:
         cols = ", ".join(_q(k) for k in lf.keys)
         self._conn.execute(f"CREATE {'UNIQUE ' if lf.unique else ''}INDEX IF NOT EXISTS {idx} ON "
                            f"{_q(pf.name)} ({cols})")
-        h = FileHandle(self._conn, pf, self._authorize, open_name=lf.name, key_cols=list(lf.keys))
+        filter_sql, filter_params = _filter_from(lf, {f.name: f for f in pf.fields})
+        h = FileHandle(self._conn, pf, self._authorize, open_name=lf.name, key_cols=list(lf.keys),
+                       mode=mode, lock=self._lock, unlock=self._unlock,
+                       filter_sql=filter_sql, filter_params=filter_params)
+        self._handles[lf.name] = h
+        return h
+
+    def open_join(self, lf: LogicalFile, pfs: dict[str, PhysicalFile], mode: str = "I") -> FileHandle:
+        """Opens a join logical file: a SQL view across every physical file lf.joined names (each
+        one's own table created first), in lf's own key order, under lf's own name for authority
+        and error messages. Read-only: write/update/delete raise on the handle this returns, the
+        same as a real join logical file. pfs must have every file lf.based_on and lf.joined name,
+        keyed by name, already parsed."""
+        primary = pfs[lf.based_on]
+        if self._authorize is not None:
+            self._authorize(lf.name, "open:" + (mode or "I").upper())
+        self._create_table(primary)
+        file_order = [lf.based_on] + [jf.name for jf in lf.joined]
+        aliases = {name: f"t{i}" for i, name in enumerate(file_order)}
+        owner_alias: dict[str, str] = {}
+        for name in file_order:
+            self._create_table(pfs[name])
+            for f in pfs[name].fields:
+                owner_alias.setdefault(f.name, aliases[name])
+        select_cols = [f"{owner_alias[f.name]}.{_q(f.name)} AS {_q(f.name)}" for f in lf.fields]
+        select_cols.append(f"t0.{_q(_RRN)} AS {_q(_RRN)}")
+        from_sql = f"{_q(lf.based_on)} AS t0"
+        for jf in lf.joined:
+            on = " AND ".join(f"t0.{_q(p)} = {aliases[jf.name]}.{_q(s)}" for p, s in jf.on)
+            from_sql += f" JOIN {_q(jf.name)} AS {aliases[jf.name]} ON {on}"
+        view = _q(lf.name)
+        self._conn.execute(f"DROP VIEW IF EXISTS {view}")
+        self._conn.execute(f"CREATE VIEW {view} AS SELECT {', '.join(select_cols)} FROM {from_sql}")
+        filter_sql, filter_params = _filter_from(lf, {f.name: f for f in lf.fields})
+        h = FileHandle(self._conn, primary, self._authorize, open_name=lf.name, key_cols=list(lf.keys),
+                       mode=mode, readonly=True, table_name=lf.name, fields=lf.fields,
+                       filter_sql=filter_sql, filter_params=filter_params)
         self._handles[lf.name] = h
         return h
 
